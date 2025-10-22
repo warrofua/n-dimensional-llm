@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from nd_llm.bottleneck import IBottleneck
-from nd_llm.orchestration import Orchestrator, UsageEvent
+from nd_llm.orchestration import CompressionRecord, Orchestrator, UsageEvent
 from nd_llm.stm import STM
 from nd_llm.utils import OrchestratorConfig, STMConfig
 
@@ -65,6 +65,10 @@ def run_demo(
                     "vendor": invoice["vendor"],
                     "kept_tokens": kept_tokens,
                 },
+                compression=CompressionRecord.from_result(
+                    compression,
+                    bottleneck=bottleneck,
+                ),
             )
         )
 

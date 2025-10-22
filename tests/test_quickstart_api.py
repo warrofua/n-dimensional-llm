@@ -4,7 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from nd_llm import IBottleneck, Orchestrator, Registry, STM, UsageEvent, pack_fields
+from nd_llm import (
+    CompressionRecord,
+    IBottleneck,
+    Orchestrator,
+    Registry,
+    STM,
+    UsageEvent,
+    pack_fields,
+)
 from nd_llm.encoders import LayoutEncoder, TextEncoder
 
 
@@ -59,6 +67,7 @@ def test_quickstart_workflow(tmp_path: Path) -> None:
         UsageEvent(
             tensor=result.telemetry.selected_scores.get("text", []),
             metadata=fields.key_rows[0],
+            compression=CompressionRecord.from_result(result, bottleneck=bottleneck),
         )
     )
 
@@ -67,6 +76,7 @@ def test_quickstart_workflow(tmp_path: Path) -> None:
     assert _as_list(tensor) == pytest.approx(result.telemetry.selected_scores.get("text", []))
     assert metadata["policy_name"] == "quickstart"
     assert metadata["target_budget"] == orchestrator.config.target_budget
+    assert metadata["compression"]["summary"]["tokens_retained"] <= metadata["compression"]["summary"]["tokens_total"]
 
 
 def test_pack_fields_validates_alignment() -> None:
