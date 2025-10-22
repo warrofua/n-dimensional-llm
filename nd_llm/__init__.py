@@ -1,6 +1,7 @@
 """ND-LLM core package exports."""
 
 from .bottleneck import IBottleneck
+from .model import NDEncoderDecoder
 from .orchestration import CompressionRecord, Orchestrator, UsageEvent
 from .registry import AffinityRule, FieldSpec, Registry
 from .stm import STM
@@ -15,6 +16,7 @@ __all__ = [
     "Orchestrator",
     "CompressionRecord",
     "UsageEvent",
+    "NDEncoderDecoder",
     "pack_fields",
     "PackedFields",
     "OrchestratorConfig",
