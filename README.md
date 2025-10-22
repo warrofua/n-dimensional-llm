@@ -114,15 +114,27 @@ pip install -e .
 ### “Hello, N‑D” (pseudo‑Python)
 
 ```python
-from nd_llm import Registry, IBottleneck, STM, Orchestrator
-from nd_llm.encoders import TextEncoder, LayoutEncoder
-from nd_llm.utils import pack_fields
+from nd_llm import IBottleneck, Orchestrator, Registry, STM, UsageEvent, pack_fields
+from nd_llm.encoders import LayoutEncoder, TextEncoder
 
-# 1) Declare fields + alignment
+# 1) Declare fields, alignment + register encoders
 reg = Registry()
 reg.add_field("text", keys=["doc_id", "span_id"], salience=True)
 reg.add_field("bbox", keys=["doc_id", "span_id"])  # layout boxes per span
+reg.register_encoder("text", TextEncoder())
+reg.register_encoder("bbox", LayoutEncoder())
 
+# 2) Core components (variable-rate bottleneck + STM orchestrator)
+ib = IBottleneck(target_budget=256)
+stm = STM.from_path("./stm")
+ctl = Orchestrator.from_components(
+    stm=stm,
+    bottleneck=ib,
+    target_budget=1.0,
+    policy_name="demo",
+)
+
+# 3) Ingest a document page
 # 2) Build encoders
 enc_text   = TextEncoder(model="tiny-bert")
 enc_layout = LayoutEncoder(kind="xyxy")
@@ -136,9 +148,18 @@ ctl = Orchestrator(stm=stm, bottleneck=ib)
 
 # 5) Ingest a document page
 fields = pack_fields(
-    text=[{"doc_id":1, "span_id":i, "text":t, "salience":s} for i,(t,s) in enumerate(spans)],
-    bbox=[{"doc_id":1, "span_id":i, "xyxy":b} for i,b in enumerate(boxes)],
+    text=[{"doc_id": 1, "span_id": i, "text": t, "salience": s} for i, (t, s) in enumerate(spans)],
+    bbox=[{"doc_id": 1, "span_id": i, "xyxy": b} for i, b in enumerate(boxes)],
 )
+field_batches = fields.to_field_batches({"text": "text"})
+
+# 4) Encode → compress → log usage metadata
+compression = ib.compress(field_batches, reg.encoders)
+ctl.log_usage_event(
+    UsageEvent(
+        tensor=compression.telemetry.selected_scores.get("text", []),
+        metadata={"doc_id": 1, "policy": ctl.config.policy_name},
+    )
 
 # 6) Encode → compress → decode
 query_embedding = enc_text.encode([
@@ -150,9 +171,6 @@ Z = ib.compress(
     registry=reg,
     context={"query_embedding": query_embedding},
 )
-
-answer = your_llm.decode(Z, prompt="Summarize the invoice totals by vendor")
-ctl.log_usage(example_id="doc_1", Z=Z, answer=answer)
 ```
 
 ### Bottleneck tuning knobs

@@ -10,7 +10,7 @@ import threading
 import zlib
 from array import array
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Dict, Iterable, Iterator, Mapping, MutableMapping, Optional, Sequence, Union
 
 from nd_llm.utils.config import STMConfig
 
@@ -51,6 +51,18 @@ class STM:
     # ------------------------------------------------------------------
     # public API
     # ------------------------------------------------------------------
+    @classmethod
+    def from_path(
+        cls,
+        storage_dir: Union[str, Path],
+        *,
+        index_filename: str = "index.json",
+    ) -> "STM":
+        """Instantiate an :class:`STM` directly from storage parameters."""
+
+        config = STMConfig(storage_dir=storage_dir, index_filename=index_filename)
+        return cls(config)
+
     @property
     def storage_dir(self) -> Path:
         return self._storage_dir

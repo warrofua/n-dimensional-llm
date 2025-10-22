@@ -6,6 +6,8 @@ import re
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Union
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from nd_llm.bottleneck.ib import CompressionResult, CompressionTelemetry, IBottleneck
@@ -17,6 +19,9 @@ from nd_llm.orchestration.budget import (
 )
 from nd_llm.stm import STM, TensorLike
 from nd_llm.utils.config import OrchestratorConfig
+
+if TYPE_CHECKING:  # pragma: no cover - imported for typing only
+    from nd_llm.bottleneck import IBottleneck
 
 
 def _to_serialisable(value: Any) -> Any:
@@ -163,11 +168,47 @@ class UsageEvent:
 class Orchestrator:
     """Co-ordinates persistence of usage events and lightweight policy probes."""
 
-    def __init__(self, stm: STM, config: OrchestratorConfig) -> None:
+    def __init__(
+        self,
+        stm: STM,
+        config: OrchestratorConfig,
+        bottleneck: Optional["IBottleneck"] = None,
+    ) -> None:
         self._stm = stm
         self._config = config
+        self._bottleneck = bottleneck
         self._usage_log: List[str] = []
         self._budget_history: List[BudgetDecision] = []
+
+    @classmethod
+    def from_components(
+        cls,
+        *,
+        target_budget: float,
+        policy_name: str = "default",
+        budget_step: float = 0.1,
+        retention_probe_sample_size: int = 10,
+        stm: Optional[STM] = None,
+        storage_dir: Optional[Union[str, Path]] = None,
+        index_filename: str = "index.json",
+        bottleneck: Optional["IBottleneck"] = None,
+    ) -> "Orchestrator":
+        """Construct an orchestrator from primitive components."""
+
+        if stm is None:
+            if storage_dir is None:
+                raise ValueError(
+                    "from_components requires either an existing STM or a storage_dir"
+                )
+            stm = STM.from_path(storage_dir, index_filename=index_filename)
+
+        config = OrchestratorConfig(
+            target_budget=target_budget,
+            policy_name=policy_name,
+            budget_step=budget_step,
+            retention_probe_sample_size=retention_probe_sample_size,
+        )
+        return cls(stm=stm, config=config, bottleneck=bottleneck)
 
     @property
     def config(self) -> OrchestratorConfig:
@@ -176,6 +217,16 @@ class Orchestrator:
     @property
     def usage_log(self) -> List[str]:
         return list(self._usage_log)
+
+    @property
+    def bottleneck(self) -> Optional["IBottleneck"]:
+        """Return the bottleneck instance associated with the orchestrator."""
+
+        return self._bottleneck
+
+    @bottleneck.setter
+    def bottleneck(self, value: Optional["IBottleneck"]) -> None:
+        self._bottleneck = value
 
     def log_usage_event(self, event: UsageEvent) -> str:
         """Persist an event's tensor payload and metadata via the STM."""
