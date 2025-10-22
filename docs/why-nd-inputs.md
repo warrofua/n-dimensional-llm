@@ -1,6 +1,6 @@
 # Why N-D (tensor) inputs are necessary for minimum-distortion prediction
 
-Below is a compact, first-principles derivation with the Information Bottleneck (IB) and Rate–Distortion (R–D) lenses. It formalizes your intuition: if reality is multi-field, then projecting to 1-D text imposes an irreducible information deficit for many tasks; synchronized N-D inputs remove that deficit and dominate in R–D.
+Below is a compact, first-principles derivation with the Information Bottleneck (IB) and Rate–Distortion (R–D) lenses. It formalizes your intuition: if reality is multi-field, then projecting to 1-D text imposes an irreducible information deficit for many tasks; synchronized N-D inputs remove that deficit and dominate in R–D. For the full metatheory plus implementation-oriented scaffolding, see the companion whitepaper [*The Tensor Is The Message*](the-tensor-is-the-message.md).
 
 ## 1) Setup
 
