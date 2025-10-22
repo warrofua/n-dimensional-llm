@@ -165,15 +165,37 @@ affinity:
   - [audio_chunk, timestamp, by: [session_id, t]]
 ```
 
+### Runnable multi-field invoice demo
+
+Kick the tyres with the deterministic invoice walk-through that wires the registry, stub encoders, bottleneck, STM, and orchestrator together:
+
+```bash
+python examples/multi_field_invoice.py
+```
+
+The script prints the compression metrics, persisted STM metadata, and probe outputs so you can verify each step of the pipeline end-to-end.
+
+### Smoke tests
+
+A lightweight CI-friendly check executes the demo and benchmark harness:
+
+```bash
+pytest tests/examples/test_multi_field_invoice.py tests/benchmarks/test_doc_understanding.py
+```
+
+Running the smoke tests locally mirrors the automation that keeps the public demos aligned with the evolving API.
+
 ---
 
-## Benchmarks (planned)
+## Benchmarks
 
-* **Doc understanding (2‑D → 3‑D time):** forms/receipts across pages and revisions; target equal accuracy with fewer tokens.
-* **Video‑text QA (time + layout):** align subtitles, frames, OCR boxes; test variable‑rate compression under latency caps.
-* **Sensor fusion QA:** text + time‑series (audio/IMU) with query‑aware budgets.
+The `benchmarks/` package now ships with a synthetic doc-understanding harness that measures accuracy vs. token budget using the invoice dataset utilities and orchestration probes:
 
-Each benchmark will report **accuracy vs. token‑budget curves** and **hallucination/faithfulness** under compression.
+```bash
+python -m benchmarks.doc_understanding
+```
+
+The default report evaluates several budgets on a repeatable dataset; tweak the parameters inside `benchmarks/doc_understanding.py` or import `run_benchmark` from Python to sweep your own ranges. Synthetic generators live alongside the harness (`benchmarks/synthetic.py`) and mirror the fixtures exposed under `tests/fixtures/` for reproducible experiments.
 
 ---
 
