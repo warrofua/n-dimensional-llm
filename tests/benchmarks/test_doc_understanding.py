@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from benchmarks.doc_understanding import run_benchmark
+from benchmarks.doc_understanding import run_benchmark, run_funsd_benchmark
 
 
 def test_run_benchmark_smoke() -> None:
@@ -11,8 +11,30 @@ def test_run_benchmark_smoke() -> None:
     assert len(report["budgets"]) == 2
 
     for entry in report["budgets"]:
-        assert {"budget", "accuracy", "average_kept_tokens", "budget_probe", "retention_probe"} <= set(entry)
+        assert {
+            "budget",
+            "accuracy",
+            "average_kept_tokens",
+            "budget_probe",
+            "retention_probe",
+            "metrics",
+        } <= set(entry)
         assert 0.0 <= entry["accuracy"] <= 1.0
         assert entry["average_kept_tokens"] >= 0
         assert isinstance(entry["budget_probe"], dict)
         assert isinstance(entry["retention_probe"], dict)
+        assert isinstance(entry["metrics"], dict)
+
+
+def test_run_funsd_benchmark_smoke() -> None:
+    report = run_funsd_benchmark(budget_values=(6,), dataset_size=2, use_sample=True)
+
+    assert report["dataset"] == "FUNSD"
+    assert report["dataset_size"] == 2
+    assert report["use_sample"] is True
+    assert len(report["budgets"]) == 1
+
+    entry = report["budgets"][0]
+    assert entry["budget"] == 6
+    assert 0.0 <= entry["accuracy"] <= 1.0
+    assert isinstance(entry["metrics"], dict)
