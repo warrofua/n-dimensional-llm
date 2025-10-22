@@ -1,18 +1,4 @@
-"""Information bottleneck interfaces."""
+"""Bottleneck implementations for ND-LLM."""
+from .ib import CompressionResult, CompressionTelemetry, IBottleneck
 
-from __future__ import annotations
-
-from abc import ABC, abstractmethod
-from typing import Any
-
-
-class IBottleneck(ABC):
-    """Abstract base class for information bottleneck modules."""
-
-    @abstractmethod
-    def compress(self, *args: Any, **kwargs: Any) -> Any:
-        """Reduce the dimensionality of the provided inputs."""
-
-    @abstractmethod
-    def decompress(self, *args: Any, **kwargs: Any) -> Any:
-        """Reconstruct the original representation from the bottleneck."""
+__all__ = ["IBottleneck", "CompressionResult", "CompressionTelemetry"]

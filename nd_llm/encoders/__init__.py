@@ -1,14 +1,4 @@
-"""Encoder definitions for nd_llm."""
+"""Encoder implementations for ND-LLM."""
+from .base import Encoder, LayoutEncoder, TextEncoder
 
-from __future__ import annotations
-
-from typing import Any
-
-
-def encode_identity(value: Any) -> Any:
-    """Identity encoder stub that returns the value unchanged."""
-
-    return value
-
-
-__all__ = ["encode_identity"]
+__all__ = ["Encoder", "TextEncoder", "LayoutEncoder"]

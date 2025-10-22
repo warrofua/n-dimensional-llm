@@ -1,17 +1,14 @@
-"""Top-level package for nd_llm."""
-
-from __future__ import annotations
-
-from importlib.metadata import PackageNotFoundError, version
-
-from .bottleneck import IBottleneck
-from .orchestration import Orchestrator
+"""Top-level exports for the ND-LLM package."""
+from .bottleneck import CompressionResult, CompressionTelemetry, IBottleneck
+from .encoders import Encoder, LayoutEncoder, TextEncoder
 from .registry import Registry
-from .stm import STM
 
-try:
-    __version__ = version("nd-llm")
-except PackageNotFoundError:  # pragma: no cover - fallback when package not installed
-    __version__ = "0.1.0"
-
-__all__ = ["__version__", "Registry", "IBottleneck", "STM", "Orchestrator"]
+__all__ = [
+    "CompressionResult",
+    "CompressionTelemetry",
+    "Encoder",
+    "IBottleneck",
+    "LayoutEncoder",
+    "Registry",
+    "TextEncoder",
+]

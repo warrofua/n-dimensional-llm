@@ -1,38 +1,29 @@
-"""Registry components for nd_llm."""
-
+"""Lightweight registry utilities for ND-LLM prototypes."""
 from __future__ import annotations
 
-from typing import Any, Dict, ItemsView
+from typing import Dict, Mapping
+
+from nd_llm.encoders import Encoder
 
 
 class Registry:
-    """Simple placeholder registry implementation.
-
-    This stub can be replaced with a feature-complete registry that
-    tracks encoders, bottlenecks, and other components. For now it only
-    stores items in an in-memory dictionary.
-    """
+    """Registry for associating field names with encoder instances."""
 
     def __init__(self) -> None:
-        self._items: Dict[str, Any] = {}
+        self._encoders: Dict[str, Encoder] = {}
 
-    def register(self, name: str, item: Any) -> None:
-        """Register an item under the provided *name*."""
+    def register_encoder(self, field: str, encoder: Encoder) -> None:
+        self._encoders[field] = encoder
 
-        self._items[name] = item
+    def get_encoder(self, field: str) -> Encoder:
+        try:
+            return self._encoders[field]
+        except KeyError as exc:  # pragma: no cover - defensive
+            raise KeyError(f"encoder not registered for field '{field}'") from exc
 
-    def get(self, name: str) -> Any:
-        """Retrieve a previously registered item."""
+    @property
+    def encoders(self) -> Mapping[str, Encoder]:
+        return dict(self._encoders)
 
-        return self._items[name]
 
-    def __contains__(self, name: str) -> bool:
-        return name in self._items
-
-    def __len__(self) -> int:
-        return len(self._items)
-
-    def items(self) -> ItemsView[str, Any]:
-        """Return a dynamic view of the registered items."""
-
-        return self._items.items()
+__all__ = ["Registry"]
