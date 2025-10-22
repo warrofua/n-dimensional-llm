@@ -31,6 +31,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 if TYPE_CHECKING:  # pragma: no cover - imported for type checking only
     from nd_llm.registry import FieldSpec, Registry
+    from nd_llm.metrics import MIProxy
 
 ScoreVector = List[float]
 Embedding = Sequence[float]
@@ -294,6 +295,7 @@ class IBottleneck:
         registry: Optional["Registry"] = None,
         field_specs: Optional[Mapping[str, "FieldSpec | Mapping[str, Any]"]] = None,
         context: Optional[Mapping[str, Any]] = None,
+        mi_proxy: Optional["MIProxy"] = None,
     ) -> CompressionResult:
         if not fields:
             raise ValueError("fields must not be empty")
@@ -352,6 +354,17 @@ class IBottleneck:
             quantized_embeddings=quantized_embeddings,
         )
         metrics = self._compute_metrics(encoded, telemetry)
+        mi_targets: Optional[Mapping[str, Any]]
+        if isinstance(context, Mapping):
+            targets = context.get("mi_targets")
+            mi_targets = targets if isinstance(targets, Mapping) else None
+        else:
+            mi_targets = None
+        mi_lower_bound = self._compute_mutual_information_lower_bound(
+            encoded, telemetry, mi_proxy, mi_targets
+        )
+        if mi_lower_bound is not None:
+            metrics["mi_lower_bound"] = mi_lower_bound
         loss_terms = self._compute_loss_terms(encoded)
         return CompressionResult(
             compressed_fields=compressed_fields,
@@ -531,6 +544,77 @@ class IBottleneck:
         }
         metrics.update(self._compute_information_proxies(encoded, telemetry))
         return metrics
+
+    def _compute_mutual_information_lower_bound(
+        self,
+        encoded: Mapping[str, List[List[float]]],
+        telemetry: CompressionTelemetry,
+        mi_proxy: Optional["MIProxy"],
+        targets: Optional[Mapping[str, Any]],
+    ) -> Optional[float]:
+        if mi_proxy is None:
+            return None
+        if torch is None:  # pragma: no cover - torch dependency enforced by proxy
+            raise RuntimeError("torch is required when supplying an MI proxy")
+        if not targets:
+            return None
+
+        samples: List["Tensor"] = []
+        target_tensors: List["Tensor"] = []
+
+        param = next(mi_proxy.parameters(), None)
+        if param is None:  # pragma: no cover - module always defines parameters
+            device = torch.device("cpu")
+            dtype = torch.float32
+        else:
+            device = param.device
+            dtype = param.dtype
+
+        for field, raw_target in targets.items():
+            indices = telemetry.selected_indices.get(field, [])
+            if not indices:
+                continue
+            embeddings = encoded.get(field)
+            if not embeddings:
+                continue
+            kept_vectors = [
+                embeddings[i]
+                for i in indices
+                if 0 <= int(i) < len(embeddings)
+            ]
+            if not kept_vectors:
+                continue
+            pooled_vector = _mean_vector(kept_vectors)
+            if not pooled_vector:
+                continue
+            sample_tensor = torch.as_tensor(pooled_vector, dtype=dtype, device=device)
+            target_tensor = _coerce_tensor(raw_target, dtype, device)
+            if target_tensor is None:
+                continue
+            sample_tensor = sample_tensor.view(-1)
+            target_tensor = target_tensor.view(-1)
+            if sample_tensor.size(0) != target_tensor.size(0):
+                continue
+            samples.append(sample_tensor)
+            target_tensors.append(target_tensor)
+
+        if not samples:
+            return None
+
+        z_tensor = torch.stack(samples, dim=0)
+        target_tensor = torch.stack(target_tensors, dim=0)
+
+        try:
+            mi_value, _ = mi_proxy(z_tensor, target_tensor)
+        except Exception:  # pragma: no cover - defensive safeguard
+            return None
+
+        if isinstance(mi_value, torch.Tensor):
+            return float(mi_value.detach().cpu().item())
+        try:
+            return float(mi_value)
+        except (TypeError, ValueError):  # pragma: no cover - unexpected return type
+            return None
 
     def _compute_loss_terms(
         self,
@@ -828,6 +912,24 @@ def _mse(a: Sequence[float], b: Sequence[float]) -> float:
         diff = av - bv
         error += diff * diff
     return error / float(dim)
+
+
+def _coerce_tensor(value: Any, dtype: "torch.dtype", device: "torch.device") -> Optional["Tensor"]:
+    if torch is None:  # pragma: no cover - torch dependency handled by caller
+        return None
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 0:
+            return None
+        return value.to(device=device, dtype=dtype)
+    if isinstance(value, Sequence):
+        try:
+            data = [float(component) for component in value]
+        except (TypeError, ValueError):
+            return None
+        if not data:
+            return None
+        return torch.as_tensor(data, dtype=dtype, device=device)
+    return None
 
 
 __all__ = [
