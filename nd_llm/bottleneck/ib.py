@@ -42,6 +42,8 @@ class CompressionTelemetry:
     field_budgets: Dict[str, int]
     allocation_weights: Dict[str, float]
     dropped_indices: Dict[str, List[int]]
+    residual_statistics: Dict[str, Dict[str, float]]
+    quantized_embeddings: Dict[str, List[Dict[str, Any]]]
 
 
 @dataclass
@@ -281,6 +283,8 @@ class IBottleneck:
         token_counts: Dict[str, int] = {}
         selected_scores: Dict[str, List[float]] = {}
         dropped_indices: Dict[str, List[int]] = {}
+        residual_statistics: Dict[str, Dict[str, float]] = {}
+        quantized_embeddings: Dict[str, List[Dict[str, Any]]] = {}
         for field, indices in selected.items():
             source = list(fields[field])
             compressed_fields[field] = [source[i] for i in indices]
@@ -290,6 +294,23 @@ class IBottleneck:
             selected_set = set(indices)
             dropped = sorted(i for i in range(len(field_scores)) if i not in selected_set)
             dropped_indices[field] = dropped
+            field_embeddings = encoded.get(field, [])
+            kept_embeddings = [field_embeddings[i] for i in indices if i < len(field_embeddings)]
+            dropped_embeddings = [field_embeddings[i] for i in dropped if i < len(field_embeddings)]
+            residual_statistics[field] = _compute_residual_statistics(
+                kept_embeddings,
+                dropped_embeddings,
+                field_scores,
+                indices,
+                dropped,
+            )
+            quantized_embeddings[field] = [
+                {
+                    "index": int(idx),
+                    **_quantize_embedding(field_embeddings[idx] if idx < len(field_embeddings) else []),
+                }
+                for idx in dropped
+            ]
 
         telemetry = CompressionTelemetry(
             selected_indices={k: list(v) for k, v in selected.items()},
@@ -299,6 +320,8 @@ class IBottleneck:
             field_budgets=field_budgets,
             allocation_weights=allocation_weights,
             dropped_indices=dropped_indices,
+            residual_statistics=residual_statistics,
+            quantized_embeddings=quantized_embeddings,
         )
         metrics = self._compute_metrics(encoded, telemetry)
         return CompressionResult(
@@ -307,10 +330,84 @@ class IBottleneck:
             metrics=metrics,
         )
 
-    def decompress(self, result: CompressionResult) -> Dict[str, List[Any]]:
-        """For the stub the decompression simply returns the kept tokens."""
+    def decompress(self, result: CompressionResult) -> Dict[str, Any]:
+        """Approximate reconstruction using stored telemetry artefacts."""
 
-        return result.compressed_fields
+        telemetry = result.telemetry
+        kept = {field: list(values) for field, values in result.compressed_fields.items()}
+
+        regenerated: Dict[str, List[Dict[str, Any]]] = {}
+        field_metrics: Dict[str, Dict[str, float]] = {}
+        retained_counts: List[int] = []
+        regenerated_counts: List[int] = []
+        mse_accumulator = 0.0
+        mse_weight = 0
+        kl_accumulator = 0.0
+        kl_fields = 0
+
+        fields = set(telemetry.token_counts) | set(kept)
+
+        for field in fields:
+            total_count = int(telemetry.token_counts.get(field, len(kept.get(field, []))))
+            kept_tokens = kept.get(field, [])
+            retained_counts.append(len(kept_tokens))
+
+            quantized = telemetry.quantized_embeddings.get(field, [])
+            residual = telemetry.residual_statistics.get(field, {})
+
+            reconstructed_embeddings = []
+            for entry in sorted(quantized, key=lambda item: item.get("index", 0)):
+                embedding = _dequantize_embedding(entry)
+                reconstructed_embeddings.append(
+                    {
+                        "index": int(entry.get("index", len(reconstructed_embeddings))),
+                        "embedding": embedding,
+                    }
+                )
+            regenerated[field] = reconstructed_embeddings
+            regenerated_counts.append(len(reconstructed_embeddings))
+
+            dropped_count = int(residual.get("dropped_count", len(reconstructed_embeddings)))
+            field_mse = float(residual.get("mean_squared_error", 0.0))
+            field_kl = float(residual.get("kl_divergence", 0.0))
+
+            if dropped_count > 0:
+                mse_accumulator += field_mse * dropped_count
+                mse_weight += dropped_count
+            if field_kl:
+                kl_accumulator += field_kl
+                kl_fields += 1
+
+            field_metrics[field] = {
+                "mse": field_mse,
+                "kl_divergence": field_kl,
+                "kept": float(len(kept_tokens)),
+                "regenerated": float(len(reconstructed_embeddings)),
+                "total": float(total_count),
+            }
+
+        total_kept = sum(retained_counts)
+        total_regenerated = sum(regenerated_counts)
+        total_tokens = total_kept + total_regenerated
+        retained_ratio = float(total_kept) / float(total_tokens) if total_tokens else 1.0
+        regenerated_ratio = float(total_regenerated) / float(total_tokens) if total_tokens else 0.0
+        mean_mse = mse_accumulator / float(mse_weight or 1)
+        mean_kl = kl_accumulator / float(kl_fields or 1)
+
+        metrics = {
+            "retained_ratio": retained_ratio,
+            "regenerated_ratio": regenerated_ratio,
+            "mean_mse": mean_mse,
+            "mean_kl_divergence": mean_kl,
+            "total_tokens": float(total_tokens),
+            "fields": field_metrics,
+        }
+
+        return {
+            "kept": kept,
+            "regenerated": regenerated,
+            "metrics": metrics,
+        }
 
     def _encode_fields(
         self,
@@ -506,6 +603,114 @@ def _coerce_field_metadata(raw: Any) -> Dict[str, Any]:
         }
 
     return {"keys": [], "salience": False, "metadata": {}, "budget_weight": None}
+
+
+def _compute_residual_statistics(
+    kept_embeddings: Sequence[Sequence[float]],
+    dropped_embeddings: Sequence[Sequence[float]],
+    scores: Sequence[float],
+    kept_indices: Sequence[int],
+    dropped_indices: Sequence[int],
+) -> Dict[str, float]:
+    kept_count = float(len(kept_embeddings))
+    dropped_count = float(len(dropped_embeddings))
+    if dropped_count == 0:
+        return {
+            "kept_count": kept_count,
+            "dropped_count": 0.0,
+            "mean_squared_error": 0.0,
+            "kl_divergence": 0.0,
+        }
+
+    kept_mean = _mean_vector(kept_embeddings) if kept_embeddings else [0.0] * len(dropped_embeddings[0])
+    dropped_mean = _mean_vector(dropped_embeddings)
+    mse = _mse(kept_mean, dropped_mean)
+
+    distribution = _softmax(scores)
+    kept_probs = [_safe_probability(distribution, idx) for idx in kept_indices]
+    dropped_probs = [_safe_probability(distribution, idx) for idx in dropped_indices]
+    kl = _kl_divergence(kept_probs, dropped_probs)
+
+    return {
+        "kept_count": kept_count,
+        "dropped_count": dropped_count,
+        "mean_squared_error": float(mse),
+        "kl_divergence": float(kl),
+    }
+
+
+def _quantize_embedding(vector: Sequence[float], levels: int = 256) -> Dict[str, Any]:
+    if not vector:
+        return {"values": [], "scale": 1.0}
+    max_abs = max(abs(float(component)) for component in vector)
+    if max_abs == 0.0:
+        return {"values": [0 for _ in vector], "scale": 1.0}
+    divisor = float((levels // 2) - 1 or 1)
+    scale = max_abs / divisor if divisor else max_abs or 1.0
+    quantized = [int(round(float(component) / scale)) for component in vector]
+    return {"values": quantized, "scale": scale}
+
+
+def _dequantize_embedding(entry: Mapping[str, Any]) -> List[float]:
+    values_raw = entry.get("values", [])
+    scale_raw = entry.get("scale", 1.0)
+    try:
+        scale = float(scale_raw)
+    except (TypeError, ValueError):
+        scale = 1.0
+    if scale == 0.0:
+        scale = 1.0
+    if isinstance(values_raw, (list, tuple)):
+        iterable = values_raw
+    else:
+        try:
+            iterable = list(values_raw)  # type: ignore[arg-type]
+        except TypeError:
+            iterable = [values_raw]
+    dequantized: List[float] = []
+    for value in iterable:
+        try:
+            dequantized.append(float(int(value)) * scale)
+        except (TypeError, ValueError):
+            dequantized.append(0.0)
+    return dequantized
+
+
+def _softmax(scores: Sequence[float]) -> List[float]:
+    if not scores:
+        return []
+    max_score = max(float(score) for score in scores)
+    exps = [math.exp(float(score) - max_score) for score in scores]
+    total = sum(exps)
+    if total == 0.0:
+        return [1.0 / float(len(scores)) for _ in scores]
+    return [value / total for value in exps]
+
+
+def _safe_probability(distribution: Sequence[float], index: int) -> float:
+    if 0 <= index < len(distribution):
+        return float(distribution[index])
+    return 0.0
+
+
+def _kl_divergence(p: Sequence[float], q: Sequence[float], eps: float = 1e-9) -> float:
+    if not p or not q:
+        return 0.0
+    max_len = max(len(p), len(q))
+    p_norm = list(p) + [0.0] * (max_len - len(p))
+    q_norm = list(q) + [0.0] * (max_len - len(q))
+    sum_p = sum(p_norm)
+    sum_q = sum(q_norm)
+    if sum_p == 0.0 or sum_q == 0.0:
+        return 0.0
+    kl = 0.0
+    for pv, qv in zip(p_norm, q_norm):
+        pv_norm = pv / sum_p
+        qv_norm = qv / sum_q
+        if pv_norm <= 0.0:
+            continue
+        kl += pv_norm * math.log(pv_norm / (qv_norm + eps))
+    return kl
 
 
 def _vector_norm(vector: Sequence[float]) -> float:
