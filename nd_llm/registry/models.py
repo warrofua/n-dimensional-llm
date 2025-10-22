@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
+from nd_llm.encoders import Encoder
+
 try:  # pragma: no cover - import shim for optional dependency
     import yaml as _pyyaml  # type: ignore[import-not-found]
 except ModuleNotFoundError:  # pragma: no cover - dependency injection point
@@ -310,6 +312,7 @@ class Registry:
 
     fields: Dict[str, FieldSpec] = field(default_factory=dict)
     affinities: List[AffinityRule] = field(default_factory=list)
+    _encoders: Dict[str, Encoder] = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def add_field(
         self,
@@ -392,6 +395,31 @@ class Registry:
         if not isinstance(data, Mapping):
             raise TypeError("YAML registry definition must produce a mapping")
         return cls.from_dict(data)
+
+    # ------------------------------------------------------------------
+    # Encoder registration helpers
+    # ------------------------------------------------------------------
+
+    def register_encoder(self, field: str, encoder: Encoder) -> None:
+        """Associate ``encoder`` with ``field`` for downstream compression."""
+
+        if not isinstance(field, str) or not field:
+            raise ValueError("field name must be a non-empty string")
+        if not isinstance(encoder, Encoder):
+            raise TypeError("encoder must implement the Encoder protocol")
+        self._encoders[field] = encoder
+
+    def get_encoder(self, field: str) -> Encoder:
+        try:
+            return self._encoders[field]
+        except KeyError as exc:  # pragma: no cover - defensive safeguard
+            raise KeyError(f"encoder not registered for field '{field}'") from exc
+
+    @property
+    def encoders(self) -> Mapping[str, Encoder]:
+        """Return a shallow copy of the registered encoder mapping."""
+
+        return dict(self._encoders)
 
     @staticmethod
     def _load_yaml(source: Union[str, Path, Any]) -> Any:
