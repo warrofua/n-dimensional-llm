@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Sequence as SequenceABC
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 from nd_llm.bottleneck.ib import CompressionResult, CompressionTelemetry, IBottleneck
 from nd_llm.orchestration.budget import (
@@ -67,6 +67,43 @@ def _coerce_float(value: Any) -> float:
 
 
 @dataclass
+class BudgetCandidate:
+    """Candidate policy describing a field set and associated budget."""
+
+    fields: Tuple[str, ...]
+    budget: float
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.fields = tuple(str(field) for field in self.fields)
+        self.budget = float(self.budget)
+        self.metadata = {str(k): v for k, v in dict(self.metadata).items()}
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "fields": list(self.fields),
+            "budget": float(self.budget),
+            "metadata": _to_serialisable(self.metadata),
+        }
+
+
+class BudgetMetaModel:
+    """Interface for scoring candidate budgets using telemetry and MI."""
+
+    name: str = "meta-model"
+
+    def score_candidate(
+        self,
+        candidate: BudgetCandidate,
+        *,
+        history: Sequence["CompressionRecord"],
+        observations: Sequence[BudgetObservation],
+        features: Mapping[str, Any],
+    ) -> float:
+        raise NotImplementedError
+
+
+@dataclass
 class CompressionRecord:
     """Snapshot of compression outputs and telemetry destined for persistence."""
 
@@ -74,6 +111,8 @@ class CompressionRecord:
     telemetry: Mapping[str, Any]
     metrics: Mapping[str, float]
     bottleneck: Optional[str] = None
+    policy_metadata: Optional[Mapping[str, Any]] = None
+    probe_outcomes: Sequence[Mapping[str, Any]] = field(default_factory=list)
 
     def summary(self) -> Dict[str, float]:
         selected = self.telemetry.get("selected_indices", {})
@@ -135,6 +174,12 @@ class CompressionRecord:
         }
         if self.bottleneck is not None:
             metadata["bottleneck"] = str(self.bottleneck)
+        if self.policy_metadata:
+            metadata["policy_metadata"] = _to_serialisable(self.policy_metadata)
+        if self.probe_outcomes:
+            metadata["probe_outcomes"] = [
+                _to_serialisable(outcome) for outcome in self.probe_outcomes
+            ]
         return metadata
 
     def to_compression_result(self) -> CompressionResult:
@@ -244,11 +289,24 @@ class CompressionRecord:
         telemetry = metadata.get("telemetry", {})
         metrics = metadata.get("metrics", {})
         bottleneck = metadata.get("bottleneck")
+        policy_metadata_raw = metadata.get("policy_metadata")
+        probe_outcomes_raw = metadata.get("probe_outcomes", [])
 
         def _ensure_mapping(value: Any) -> Dict[str, Any]:
             if isinstance(value, Mapping):
                 return {str(k): v for k, v in value.items()}
             return {}
+
+        def _ensure_sequence_mapping(value: Any) -> List[Dict[str, Any]]:
+            items: List[Dict[str, Any]] = []
+            for entry in _iterable_to_list(value):
+                if isinstance(entry, Mapping):
+                    items.append({str(k): v for k, v in entry.items()})
+            return items
+
+        policy_metadata = _ensure_mapping(policy_metadata_raw)
+        if not policy_metadata:
+            policy_metadata = None
 
         return cls(
             compressed_fields={
@@ -258,6 +316,8 @@ class CompressionRecord:
             telemetry=_ensure_mapping(telemetry),
             metrics={str(name): float(val) for name, val in _ensure_mapping(metrics).items()},
             bottleneck=str(bottleneck) if bottleneck is not None else None,
+            policy_metadata=policy_metadata,
+            probe_outcomes=_ensure_sequence_mapping(probe_outcomes_raw),
         )
 
     @classmethod
@@ -266,6 +326,8 @@ class CompressionRecord:
         result: CompressionResult,
         *,
         bottleneck: Optional[Union[str, IBottleneck]] = None,
+        policy_metadata: Optional[Mapping[str, Any]] = None,
+        probe_outcomes: Optional[Sequence[Mapping[str, Any]]] = None,
     ) -> "CompressionRecord":
         """Create a record directly from a :class:`CompressionResult`."""
 
@@ -292,6 +354,12 @@ class CompressionRecord:
             telemetry=telemetry_payload,
             metrics=result.metrics,
             bottleneck=bottleneck_name,
+            policy_metadata={str(k): v for k, v in dict(policy_metadata or {}).items()} or None,
+            probe_outcomes=[
+                {str(k): v for k, v in dict(outcome).items()}
+                for outcome in list(probe_outcomes or [])
+                if isinstance(outcome, Mapping)
+            ],
         )
 
 
@@ -305,6 +373,9 @@ class UsageEvent:
     compression: Optional[CompressionRecord] = None
 
 
+Snapshot = Tuple[str, "CompressionRecord", Mapping[str, Any]]
+
+
 class Orchestrator:
     """Co-ordinates persistence of usage events and lightweight policy probes."""
 
@@ -313,12 +384,17 @@ class Orchestrator:
         stm: STM,
         config: OrchestratorConfig,
         bottleneck: Optional["IBottleneck"] = None,
+        meta_model: Optional[BudgetMetaModel] = None,
     ) -> None:
         self._stm = stm
         self._config = config
         self._bottleneck = bottleneck
+        self._meta_model = meta_model
         self._usage_log: List[str] = []
         self._budget_history: List[BudgetDecision] = []
+        self._last_policy_metadata: Optional[Dict[str, Any]] = None
+        self._recent_probe_outcomes: List[Dict[str, Any]] = []
+        self._probe_history_limit = 5
 
     @classmethod
     def from_components(
@@ -332,6 +408,7 @@ class Orchestrator:
         storage_dir: Optional[Union[str, Path]] = None,
         index_filename: str = "index.json",
         bottleneck: Optional["IBottleneck"] = None,
+        meta_model: Optional[BudgetMetaModel] = None,
     ) -> "Orchestrator":
         """Construct an orchestrator from primitive components."""
 
@@ -348,7 +425,7 @@ class Orchestrator:
             budget_step=budget_step,
             retention_probe_sample_size=retention_probe_sample_size,
         )
-        return cls(stm=stm, config=config, bottleneck=bottleneck)
+        return cls(stm=stm, config=config, bottleneck=bottleneck, meta_model=meta_model)
 
     @property
     def config(self) -> OrchestratorConfig:
@@ -368,6 +445,16 @@ class Orchestrator:
     def bottleneck(self, value: Optional["IBottleneck"]) -> None:
         self._bottleneck = value
 
+    @property
+    def meta_model(self) -> Optional[BudgetMetaModel]:
+        """Return the meta-model attached to the orchestrator, if any."""
+
+        return self._meta_model
+
+    @meta_model.setter
+    def meta_model(self, value: Optional[BudgetMetaModel]) -> None:
+        self._meta_model = value
+
     def log_usage_event(self, event: UsageEvent) -> str:
         """Persist an event's tensor payload and metadata via the STM."""
 
@@ -378,7 +465,40 @@ class Orchestrator:
         metadata.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
 
         if event.compression is not None:
-            compression_metadata = event.compression.as_metadata()
+            compression_record = event.compression
+            if self._last_policy_metadata and not compression_record.policy_metadata:
+                compression_record = replace(
+                    compression_record,
+                    policy_metadata=dict(self._last_policy_metadata),
+                )
+
+            if self._recent_probe_outcomes:
+                existing = [
+                    dict(outcome)
+                    for outcome in _iterable_to_list(compression_record.probe_outcomes)
+                    if isinstance(outcome, Mapping)
+                ]
+                seen_ids = {
+                    str(outcome.get("id"))
+                    for outcome in existing
+                    if isinstance(outcome, Mapping)
+                }
+                combined = existing[:]
+                for outcome in self._recent_probe_outcomes:
+                    outcome_id = str(outcome.get("id")) if outcome.get("id") is not None else None
+                    if outcome_id is None or outcome_id not in seen_ids:
+                        combined.append(dict(outcome))
+                        if outcome_id is not None:
+                            seen_ids.add(outcome_id)
+                if self._probe_history_limit > 0:
+                    combined = combined[-self._probe_history_limit :]
+                compression_record = replace(
+                    compression_record,
+                    probe_outcomes=combined,
+                )
+
+            event.compression = compression_record
+            compression_metadata = compression_record.as_metadata()
             metadata.setdefault("compression", compression_metadata)
             summary = compression_metadata.get("summary", {})
             if isinstance(summary, Mapping):
@@ -442,7 +562,9 @@ class Orchestrator:
     ) -> float:
         """Adjust the orchestrator budget based on recent telemetry observations."""
 
-        observations = self._collect_budget_observations(window=window)
+        snapshots = self._collect_record_snapshots(window=window)
+        observations = self._collect_budget_observations(window=window, snapshots=snapshots)
+        history_features = self._build_history_features(snapshots, observations)
         if strategy is None:
             strategy = CompressionRatioBudgetStrategy(step=self._config.budget_step)
 
@@ -450,12 +572,89 @@ class Orchestrator:
         decision = replace(
             decision,
             timestamp=datetime.now(timezone.utc).isoformat(),
-            metadata={**decision.metadata, "observations": [obs.as_dict() for obs in observations]},
+            metadata={
+                **decision.metadata,
+                "observations": [obs.as_dict() for obs in observations],
+                "history_features": history_features,
+            },
         )
+
+        meta_model = self._meta_model
+        meta_summary: Optional[Dict[str, Any]] = None
+        if meta_model and snapshots:
+            field_sets = self._infer_candidate_field_sets(snapshots)
+            candidate_budgets = self._candidate_budgets(decision.proposed_budget, snapshots)
+            history_records = [record for _, record, _ in snapshots]
+            evaluations: List[Dict[str, Any]] = []
+            best_evaluation: Optional[Dict[str, Any]] = None
+
+            for fields in field_sets:
+                for budget in candidate_budgets:
+                    candidate_metadata = {
+                        "history_record_count": history_features.get("record_count", 0),
+                        "mean_information_bound": history_features.get("mean_information_bound", 0.0),
+                        "field_information": {
+                            field: history_features.get("field_information", {}).get(field, 0.0)
+                            for field in fields
+                        },
+                    }
+                    candidate = BudgetCandidate(fields=fields, budget=budget, metadata=candidate_metadata)
+
+                    try:
+                        score = float(
+                            meta_model.score_candidate(
+                                candidate,
+                                history=history_records,
+                                observations=observations,
+                                features=history_features,
+                            )
+                        )
+                    except Exception:
+                        score = float(self._fallback_candidate_score(candidate, snapshots))
+
+                    evaluation = {"candidate": candidate.as_dict(), "score": score}
+                    evaluations.append(evaluation)
+                    if best_evaluation is None or score > best_evaluation.get("score", float("-inf")):
+                        best_evaluation = evaluation
+
+            if evaluations:
+                model_name = getattr(meta_model, "name", meta_model.__class__.__name__)
+                meta_summary = {
+                    "model": model_name,
+                    "evaluations": evaluations,
+                    "features": history_features,
+                    "candidate_space": {
+                        "budgets": candidate_budgets,
+                        "field_sets": [list(field_set) for field_set in field_sets],
+                    },
+                }
+                if best_evaluation is not None:
+                    meta_summary["selected"] = best_evaluation
+                    selected_budget = float(best_evaluation["candidate"]["budget"])
+                    if abs(selected_budget - float(decision.proposed_budget)) > 1e-6:
+                        decision = replace(
+                            decision,
+                            proposed_budget=selected_budget,
+                            reason=f"meta-model:{model_name}",
+                        )
+
+                decision = replace(
+                    decision,
+                    metadata={**decision.metadata, "meta_model": meta_summary},
+                )
+
         self._budget_history.append(decision)
 
         if decision.proposed_budget != self._config.target_budget:
             self._config = replace(self._config, target_budget=decision.proposed_budget)
+
+        self._last_policy_metadata = {
+            "policy": self._config.policy_name,
+            "decision": decision.as_dict(),
+            "snapshot_keys": [key for key, _, _ in snapshots],
+        }
+        if meta_summary is not None:
+            self._last_policy_metadata["meta_model"] = meta_summary
 
         return decision.proposed_budget
 
@@ -552,7 +751,7 @@ class Orchestrator:
                 "details": [],
             }
 
-        return {
+        result = {
             "total_retained": len(keys),
             "sampled_keys": probe_entries,
             "log_size": len(self._usage_log),
@@ -561,17 +760,168 @@ class Orchestrator:
             "issues": issues,
         }
 
-    def _generate_key(self, prefix: Optional[str] = None) -> str:
-        base = prefix or "event"
-        safe_base = re.sub(r"[^A-Za-z0-9_.-]", "_", base)
-        return f"{safe_base}-{uuid.uuid4().hex[:8]}"
+        self._append_probe_outcome(
+            {
+                "type": "retention_probe",
+                "timestamp": result["timestamp"],
+                "summary": reconstruction_summary,
+                "issues": issues,
+                "sampled_keys": probe_entries,
+            }
+        )
 
-    def _collect_budget_observations(self, *, window: Optional[int]) -> List[BudgetObservation]:
+        return result
+
+    def run_proxy_trial(
+        self,
+        *,
+        candidate_budget: float,
+        fields: Optional[Sequence[str]] = None,
+        window: Optional[int] = None,
+        include_adversarial: bool = False,
+        adversarial_limit: int = 5,
+    ) -> Dict[str, Any]:
+        """Score a candidate policy using stored compression telemetry."""
+
+        snapshots = self._collect_record_snapshots(window=window)
+        observations = self._collect_budget_observations(window=window, snapshots=snapshots)
+        features = self._build_history_features(snapshots, observations)
+
+        field_sets = self._infer_candidate_field_sets(snapshots)
+        if fields is None and field_sets:
+            fields = list(field_sets[0])
+
+        candidate_fields = tuple(str(field) for field in (fields or ()))
+        candidate_metadata = {
+            "history_record_count": features.get("record_count", 0),
+            "mean_information_bound": features.get("mean_information_bound", 0.0),
+            "field_information": {
+                field: features.get("field_information", {}).get(field, 0.0)
+                for field in candidate_fields
+            },
+        }
+        candidate = BudgetCandidate(
+            fields=candidate_fields,
+            budget=float(candidate_budget),
+            metadata=candidate_metadata,
+        )
+
+        meta_model = self._meta_model
+        model_name = getattr(meta_model, "name", meta_model.__class__.__name__) if meta_model else None
+        if meta_model:
+            history_records = [record for _, record, _ in snapshots]
+            try:
+                score = float(
+                    meta_model.score_candidate(
+                        candidate,
+                        history=history_records,
+                        observations=observations,
+                        features=features,
+                    )
+                )
+            except Exception:
+                score = float(self._fallback_candidate_score(candidate, snapshots))
+        else:
+            score = float(self._fallback_candidate_score(candidate, snapshots))
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+        result: Dict[str, Any] = {
+            "candidate": candidate.as_dict(),
+            "score": score,
+            "history_window": len(snapshots),
+            "timestamp": timestamp,
+            "meta_model": model_name,
+            "features": features,
+            "sample_keys": [key for key, _, _ in snapshots],
+        }
+
+        if include_adversarial:
+            result["adversarial_samples"] = self.generate_adversarial_samples(
+                limit=adversarial_limit,
+                window=window,
+                snapshots=snapshots,
+            )
+
+        self._append_probe_outcome(
+            {
+                "type": "proxy_trial",
+                "timestamp": timestamp,
+                "candidate": result["candidate"],
+                "score": score,
+                "meta_model": model_name,
+            }
+        )
+
+        return result
+
+    def generate_adversarial_samples(
+        self,
+        *,
+        limit: int = 5,
+        window: Optional[int] = None,
+        snapshots: Optional[Sequence[Snapshot]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return high-severity compression samples for rapid evaluation."""
+
+        if snapshots is None:
+            snapshots = self._collect_record_snapshots(window=window)
+
+        samples: List[Dict[str, Any]] = []
+        for key, record, _ in snapshots:
+            summary = record.summary()
+            metrics = dict(record.metrics)
+            mutual_information = float(metrics.get("information_bound", 0.0) or 0.0)
+            tokens_total = float(summary.get("tokens_total", 0.0) or 0.0)
+            tokens_retained = float(summary.get("tokens_retained", 0.0) or 0.0)
+            tokens_dropped = max(tokens_total - tokens_retained, 0.0)
+            dropped_ratio = float(tokens_dropped / tokens_total) if tokens_total else 0.0
+            info_shortfall = max(0.0, 1.0 - min(mutual_information, 1.0))
+            severity = dropped_ratio + info_shortfall
+
+            telemetry = record.telemetry if isinstance(record.telemetry, Mapping) else {}
+            fields = list(record.compressed_fields.keys())
+            if not fields:
+                token_counts = telemetry.get("token_counts", {}) if isinstance(telemetry, Mapping) else {}
+                if isinstance(token_counts, Mapping):
+                    fields = [str(field) for field in token_counts.keys()]
+
+            samples.append(
+                {
+                    "key": key,
+                    "fields": sorted(str(field) for field in fields),
+                    "summary": summary,
+                    "mutual_information": mutual_information,
+                    "telemetry": _to_serialisable(telemetry),
+                    "policy_metadata": _to_serialisable(record.policy_metadata)
+                    if record.policy_metadata
+                    else None,
+                    "probe_outcomes": [
+                        _to_serialisable(outcome) for outcome in record.probe_outcomes
+                    ],
+                    "severity": severity,
+                }
+            )
+
+        samples.sort(key=lambda item: float(item.get("severity", 0.0)), reverse=True)
+        if limit > 0:
+            samples = samples[:limit]
+
+        return samples
+
+    def _append_probe_outcome(self, outcome: Mapping[str, Any]) -> None:
+        payload = {str(k): _to_serialisable(v) for k, v in dict(outcome).items()}
+        payload.setdefault("id", uuid.uuid4().hex[:12])
+        payload.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        self._recent_probe_outcomes.append(payload)
+        if self._probe_history_limit > 0 and len(self._recent_probe_outcomes) > self._probe_history_limit:
+            self._recent_probe_outcomes = self._recent_probe_outcomes[-self._probe_history_limit :]
+
+    def _collect_record_snapshots(self, *, window: Optional[int]) -> List[Snapshot]:
         if window is None:
             window = min(len(self._usage_log), self._config.retention_probe_sample_size)
 
         recent_keys = self._usage_log[-window:]
-        observations: List[BudgetObservation] = []
+        snapshots: List[Snapshot] = []
 
         for key in reversed(recent_keys):
             try:
@@ -588,11 +938,188 @@ class Orchestrator:
                 continue
 
             record = CompressionRecord.from_metadata(compression_data)
+            snapshots.append((key, record, metadata))
+
+        return snapshots
+
+    def _build_history_features(
+        self,
+        snapshots: Sequence[Snapshot],
+        observations: Sequence[BudgetObservation],
+    ) -> Dict[str, Any]:
+        def _safe_mean(values: Sequence[float]) -> float:
+            return float(sum(values) / len(values)) if values else 0.0
+
+        info_bounds: List[float] = []
+        field_information: Dict[str, List[float]] = {}
+        budgets: List[float] = []
+
+        for _, record, _ in snapshots:
+            metrics = record.metrics if isinstance(record.metrics, Mapping) else {}
+            info_value = metrics.get("information_bound")
+            if isinstance(info_value, (int, float)):
+                info_bounds.append(float(info_value))
+
+            telemetry = record.telemetry if isinstance(record.telemetry, Mapping) else {}
+            field_mi = telemetry.get("field_mutual_information", {})
+            if isinstance(field_mi, Mapping):
+                for field, value in field_mi.items():
+                    try:
+                        field_information.setdefault(str(field), []).append(float(value))
+                    except (TypeError, ValueError):
+                        continue
+
+            budget_value = telemetry.get("budget")
+            if isinstance(budget_value, (int, float)):
+                budgets.append(float(budget_value))
+
+        mean_ratio = _safe_mean([obs.compression_ratio for obs in observations])
+        mean_tokens_total = _safe_mean([float(obs.tokens_total) for obs in observations])
+        mean_tokens_retained = _safe_mean([float(obs.tokens_retained) for obs in observations])
+
+        features: Dict[str, Any] = {
+            "mean_information_bound": _safe_mean(info_bounds),
+            "max_information_bound": max(info_bounds) if info_bounds else 0.0,
+            "field_information": {
+                field: _safe_mean(values)
+                for field, values in field_information.items()
+            },
+            "mean_compression_ratio": mean_ratio,
+            "mean_tokens_total": mean_tokens_total,
+            "mean_tokens_retained": mean_tokens_retained,
+            "observation_count": len(observations),
+            "record_count": len(snapshots),
+            "budget_mean": _safe_mean(budgets),
+            "record_summaries": [record.summary() for _, record, _ in snapshots],
+            "recent_fields": [
+                sorted(
+                    {
+                        str(field)
+                        for field in (
+                            list(record.compressed_fields.keys())
+                            or list(
+                                (record.telemetry or {}).get("token_counts", {}).keys()
+                                if isinstance(record.telemetry, Mapping)
+                                else []
+                            )
+                        )
+                    }
+                )
+                for _, record, _ in snapshots
+            ],
+        }
+
+        return features
+
+    def _infer_candidate_field_sets(self, snapshots: Sequence[Snapshot]) -> List[Tuple[str, ...]]:
+        field_sets: List[Tuple[str, ...]] = []
+        union_fields: List[str] = []
+
+        for _, record, _ in snapshots:
+            fields = [str(field) for field in record.compressed_fields.keys()]
+            telemetry = record.telemetry if isinstance(record.telemetry, Mapping) else {}
+            if not fields and isinstance(telemetry, Mapping):
+                token_counts = telemetry.get("token_counts", {})
+                if isinstance(token_counts, Mapping):
+                    fields = [str(field) for field in token_counts.keys()]
+
+            if fields:
+                sorted_fields = tuple(sorted(fields))
+                if sorted_fields not in field_sets:
+                    field_sets.append(sorted_fields)
+                for field in sorted_fields:
+                    if field not in union_fields:
+                        union_fields.append(field)
+
+        if union_fields:
+            union_tuple = tuple(sorted(union_fields))
+            if union_tuple not in field_sets:
+                field_sets.append(union_tuple)
+
+        if not field_sets:
+            field_sets.append(tuple())
+
+        return field_sets
+
+    def _candidate_budgets(self, base_budget: float, snapshots: Sequence[Snapshot]) -> List[float]:
+        budgets: List[float] = [float(base_budget), float(self._config.target_budget)]
+        step = max(float(self._config.budget_step), 0.0)
+
+        if step > 0:
+            budgets.append(max(step, float(self._config.target_budget) - step))
+            budgets.append(float(self._config.target_budget) + step)
+
+        for _, record, _ in snapshots:
+            telemetry = record.telemetry if isinstance(record.telemetry, Mapping) else {}
+            budget_value = telemetry.get("budget")
+            if isinstance(budget_value, (int, float)):
+                budgets.append(float(budget_value))
+            field_budgets = telemetry.get("field_budgets")
+            if isinstance(field_budgets, Mapping):
+                for value in field_budgets.values():
+                    if isinstance(value, (int, float)):
+                        budgets.append(float(value))
+
+        min_budget = max(step or 1e-3, 1e-3)
+        normalised = {
+            round(float(budget) if budget > 0 else min_budget, 6)
+            for budget in budgets
+        }
+
+        return sorted(normalised)
+
+    def _fallback_candidate_score(
+        self,
+        candidate: BudgetCandidate,
+        snapshots: Sequence[Snapshot],
+    ) -> float:
+        if not snapshots:
+            return 0.0
+
+        mi_values: List[float] = []
+        drop_ratios: List[float] = []
+
+        for _, record, _ in snapshots:
+            metrics = record.metrics if isinstance(record.metrics, Mapping) else {}
+            info_value = metrics.get("information_bound")
+            if isinstance(info_value, (int, float)):
+                mi_values.append(float(info_value))
+
+            summary = record.summary()
+            tokens_total = float(summary.get("tokens_total", 0.0) or 0.0)
+            tokens_retained = float(summary.get("tokens_retained", 0.0) or 0.0)
+            if tokens_total > 0:
+                drop_ratios.append(max(0.0, 1.0 - (tokens_retained / tokens_total)))
+
+        mean_mi = float(sum(mi_values) / len(mi_values)) if mi_values else 0.0
+        mean_drop = float(sum(drop_ratios) / len(drop_ratios)) if drop_ratios else 0.0
+        denominator = max(candidate.budget, 1e-3)
+
+        return (mean_mi + 1.0 - mean_drop) / denominator
+
+    def _generate_key(self, prefix: Optional[str] = None) -> str:
+        base = prefix or "event"
+        safe_base = re.sub(r"[^A-Za-z0-9_.-]", "_", base)
+        return f"{safe_base}-{uuid.uuid4().hex[:8]}"
+
+    def _collect_budget_observations(
+        self,
+        *,
+        window: Optional[int],
+        snapshots: Optional[Sequence[Snapshot]] = None,
+    ) -> List[BudgetObservation]:
+        if snapshots is None:
+            snapshots = self._collect_record_snapshots(window=window)
+
+        observations: List[BudgetObservation] = []
+
+        for key, record, metadata in snapshots:
             summary = record.summary()
             compression_ratio = float(summary.get("compression_ratio", 0.0) or 0.0)
             tokens_total = int(summary.get("tokens_total", 0.0) or 0)
             tokens_retained = int(summary.get("tokens_retained", 0.0) or 0)
-            timestamp = metadata.get("timestamp") if isinstance(metadata.get("timestamp"), str) else None
+            timestamp_value = metadata.get("timestamp") if isinstance(metadata, Mapping) else None
+            timestamp = timestamp_value if isinstance(timestamp_value, str) else None
 
             observations.append(
                 BudgetObservation(
@@ -612,4 +1139,10 @@ class Orchestrator:
         return list(self._budget_history)
 
 
-__all__ = ["CompressionRecord", "Orchestrator", "UsageEvent"]
+__all__ = [
+    "BudgetCandidate",
+    "BudgetMetaModel",
+    "CompressionRecord",
+    "Orchestrator",
+    "UsageEvent",
+]
