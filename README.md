@@ -155,7 +155,7 @@ fields:
   bbox:
     keys: [doc_id, span_id]
   timestamp:
-    keys: [doc_id, frame_id]
+    keys: [doc_id, frame_id, session_id, t]
   audio_chunk:
     keys: [session_id, t]
 
