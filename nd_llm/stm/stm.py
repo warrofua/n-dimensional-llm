@@ -173,7 +173,7 @@ class STM:
 
     def _tensor_filename(self, key: str) -> str:
         safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
-        digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
+        digest = hashlib.sha1(key.encode("utf-8")).hexdigest()
         return f"{safe_key}_{digest}.bin"
 
     def _prepare_payload(self, tensor: TensorLike) -> tuple[bytes, Sequence[int], int]:
