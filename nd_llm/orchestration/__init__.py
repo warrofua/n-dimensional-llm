@@ -6,7 +6,13 @@ from .budget import (
     BudgetStrategy,
     CompressionRatioBudgetStrategy,
 )
-from .orchestrator import CompressionRecord, Orchestrator, UsageEvent
+from .orchestrator import (
+    BudgetCandidate,
+    BudgetMetaModel,
+    CompressionRecord,
+    Orchestrator,
+    UsageEvent,
+)
 
 __all__ = [
     "BudgetDecision",
@@ -14,6 +20,8 @@ __all__ = [
     "BudgetStrategy",
     "CompressionRatioBudgetStrategy",
     "CompressionRecord",
+    "BudgetCandidate",
+    "BudgetMetaModel",
     "Orchestrator",
     "UsageEvent",
 ]
