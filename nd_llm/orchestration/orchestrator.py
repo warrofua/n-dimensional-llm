@@ -102,13 +102,20 @@ class CompressionRecord:
                         continue
             if regenerated_total:
                 regenerated = float(regenerated_total)
-        return {
+        summary: Dict[str, float] = {
             "tokens_total": float(total_tokens),
             "tokens_retained": float(retained),
             "tokens_dropped": float(dropped),
             "tokens_regenerated": float(regenerated),
             "compression_ratio": ratio,
         }
+        if isinstance(self.metrics, Mapping):
+            for name, value in self.metrics.items():
+                try:
+                    summary[str(name)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+        return summary
 
     def as_metadata(self) -> Dict[str, Any]:
         metadata: Dict[str, Any] = {

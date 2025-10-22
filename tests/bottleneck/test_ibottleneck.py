@@ -1,3 +1,5 @@
+import math
+
 import pytest
 import torch
 
@@ -8,6 +10,8 @@ from nd_llm.bottleneck import (
     configure_scorer,
 )
 from nd_llm.encoders import Encoder, LayoutEncoder, TextEncoder
+from nd_llm.metrics import MIProxy
+from nd_llm.orchestration.orchestrator import CompressionRecord
 from nd_llm.registry import Registry
 
 
@@ -180,3 +184,45 @@ def test_encoder_protocol_and_registry_compatibility():
     assert set(result.telemetry.selected_indices.keys()) == {"text", "layout"}
     assert all(isinstance(v, list) for v in result.compressed_fields.values())
     assert sum(result.telemetry.field_budgets.values()) == 2
+
+
+def test_mi_proxy_improves_alignment_score():
+    torch.manual_seed(0)
+    proxy = MIProxy(d_model=4, d_proj=8, temperature=0.05)
+
+    batch = 4
+    tokens = 3
+    embeddings = torch.randn(batch, tokens, 4)
+    aligned_targets = embeddings.mean(dim=1)
+    misaligned_targets = aligned_targets.roll(1, dims=0)
+
+    aligned_lb, aligned_logits = proxy(embeddings, aligned_targets)
+    misaligned_lb, misaligned_logits = proxy(embeddings, misaligned_targets)
+
+    assert aligned_lb.item() > misaligned_lb.item()
+    assert torch.diagonal(aligned_logits).mean().item() > torch.diagonal(misaligned_logits).mean().item()
+
+
+def test_compression_summary_includes_mutual_information_metric():
+    fields = {
+        "text": ["alpha", "beta"],
+        "layout": ["x0", "x1"],
+    }
+    encoders = {
+        "text": MockEncoder([[1.2, 0.0], [0.0, 0.8]]),
+        "layout": MockEncoder([[0.0, 1.1], [0.9, 0.2]]),
+    }
+    proxy = MIProxy(d_model=2, d_proj=4, temperature=0.1)
+    context = {"mi_targets": {"text": [1.0, 0.0], "layout": [0.0, 1.0]}}
+
+    bottleneck = IBottleneck(target_budget=2)
+    result = bottleneck.compress(fields, encoders, context=context, mi_proxy=proxy)
+
+    assert "mi_lower_bound" in result.metrics
+    mi_value = result.metrics["mi_lower_bound"]
+    assert math.isfinite(mi_value)
+
+    record = CompressionRecord.from_result(result)
+    summary = record.summary()
+    assert "mi_lower_bound" in summary
+    assert summary["mi_lower_bound"] == pytest.approx(mi_value)
