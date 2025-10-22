@@ -48,6 +48,13 @@ A control loop that probes what the model remembers, tunes bottleneck budgets, r
 * Budget scheduling (tighten/loosen by task, user, or SLA).
 * “Pay with bits only when it pays with accuracy.”
 
+#### Operating the Auto‑IB Orchestrator
+
+* Wrap each STM append in a :class:`UsageEvent` that can carry the compressed tensor **and** a :class:`CompressionRecord`. Telemetry such as selected indices, token counts, and IB metrics are captured under ``metadata["compression"]`` and mirrored in the STM index.
+* Call :func:`Orchestrator.tune_budget` periodically (e.g., after processing a batch). The default :class:`CompressionRatioBudgetStrategy` looks at the recent compression ratios and adjusts ``Orchestrator.config.target_budget`` upward when quality drops or downward when utilisation saturates. Inspect ``Orchestrator.budget_history`` to audit the decisions.
+* Trigger :func:`Orchestrator.run_retention_probe` on a schedule to sample STM entries, reconstruct them with the stored :class:`~nd_llm.bottleneck.ib.IBottleneck` telemetry, and monitor reconstruction quality / drift. Any missing or malformed telemetry is surfaced under ``probe["issues"]``.
+* Use the new STM query helpers such as :func:`STM.query` or :func:`STM.list_by_alignment` to fetch aligned batches of entries (e.g., all shards for a ``session_id``) without loading every payload.
+
 ---
 
 ## Architecture (high level)
@@ -128,6 +135,18 @@ ctl = Orchestrator.from_components(
 )
 
 # 3) Ingest a document page
+# 2) Build encoders
+enc_text   = TextEncoder(model="tiny-bert")
+enc_layout = LayoutEncoder(kind="xyxy")
+
+# 3) Variable‑rate bottleneck (target ~256 tokens eq.)
+ib = IBottleneck(target_budget=256, objective="query-dot")
+
+# 4) Semantic Tensor Memory + Orchestrator
+stm = STM(store_dir="./stm")
+ctl = Orchestrator(stm=stm, bottleneck=ib)
+
+# 5) Ingest a document page
 fields = pack_fields(
     text=[{"doc_id": 1, "span_id": i, "text": t, "salience": s} for i, (t, s) in enumerate(spans)],
     bbox=[{"doc_id": 1, "span_id": i, "xyxy": b} for i, b in enumerate(boxes)],
@@ -141,8 +160,25 @@ ctl.log_usage_event(
         tensor=compression.telemetry.selected_scores.get("text", []),
         metadata={"doc_id": 1, "policy": ctl.config.policy_name},
     )
+
+# 6) Encode → compress → decode
+query_embedding = enc_text.encode([
+    "Summarize the invoice totals by vendor",
+])[0]
+Z = ib.compress(
+    fields,
+    encoders={"text": enc_text, "bbox": enc_layout},
+    registry=reg,
+    context={"query_embedding": query_embedding},
 )
 ```
+
+### Bottleneck tuning knobs
+
+* **Objective / scoring:** pass `objective="l2-norm"` (default) for magnitude gating or `objective="query-dot"` to enable the built-in query-conditioned scorer. You can also inject your own scorer via the `scorer` argument; it receives `(field, embeddings, metadata, context)` and should return a score per token.
+* **Query context:** provide query embeddings or other conditioning signals through the `context` mapping (e.g. `{"query_embedding": vector}`) and they will be forwarded to the scoring strategy.
+* **Budget allocator:** override `budget_allocator` to customize per-field sub-budgets. The default `RegistryAwareBudgetAllocator` inspects registry metadata (salience flags, alignment keys, optional `budget_weight`) and records the resulting `field_budgets` and `allocation_weights` in `CompressionTelemetry`.
+* **Metrics:** every call to `compress` returns a `CompressionResult.metrics` dictionary with IB/RD proxies such as `ib_proxy`, `rd_proxy`, and an `embedding_reconstruction_error` computed from kept vs. dropped embeddings.
 
 ### Minimal field‑registry (YAML)
 
@@ -164,15 +200,37 @@ affinity:
   - [audio_chunk, timestamp, by: [session_id, t]]
 ```
 
+### Runnable multi-field invoice demo
+
+Kick the tyres with the deterministic invoice walk-through that wires the registry, stub encoders, bottleneck, STM, and orchestrator together:
+
+```bash
+python examples/multi_field_invoice.py
+```
+
+The script prints the compression metrics, persisted STM metadata, and probe outputs so you can verify each step of the pipeline end-to-end.
+
+### Smoke tests
+
+A lightweight CI-friendly check executes the demo and benchmark harness:
+
+```bash
+pytest tests/examples/test_multi_field_invoice.py tests/benchmarks/test_doc_understanding.py
+```
+
+Running the smoke tests locally mirrors the automation that keeps the public demos aligned with the evolving API.
+
 ---
 
-## Benchmarks (planned)
+## Benchmarks
 
-* **Doc understanding (2‑D → 3‑D time):** forms/receipts across pages and revisions; target equal accuracy with fewer tokens.
-* **Video‑text QA (time + layout):** align subtitles, frames, OCR boxes; test variable‑rate compression under latency caps.
-* **Sensor fusion QA:** text + time‑series (audio/IMU) with query‑aware budgets.
+The `benchmarks/` package now ships with a synthetic doc-understanding harness that measures accuracy vs. token budget using the invoice dataset utilities and orchestration probes:
 
-Each benchmark will report **accuracy vs. token‑budget curves** and **hallucination/faithfulness** under compression.
+```bash
+python -m benchmarks.doc_understanding
+```
+
+The default report evaluates several budgets on a repeatable dataset; tweak the parameters inside `benchmarks/doc_understanding.py` or import `run_benchmark` from Python to sweep your own ranges. Synthetic generators live alongside the harness (`benchmarks/synthetic.py`) and mirror the fixtures exposed under `tests/fixtures/` for reproducible experiments.
 
 ---
 
