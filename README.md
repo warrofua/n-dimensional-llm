@@ -207,6 +207,20 @@ python examples/multi_field_invoice.py
 
 The script prints the compression metrics, persisted STM metadata, and probe outputs so you can verify each step of the pipeline end-to-end.
 
+### Training & evaluation scripts
+
+Prototype end-to-end training and rate–distortion sweeps with the bundled CLIs:
+
+```bash
+# fine-tune the NDEncoderDecoder scaffold on synthetic invoices
+python scripts/train.py --epochs 1 --dataset-size 24 --budget 8 --output runs/train.json
+
+# evaluate rate–distortion across token budgets (optionally pass --checkpoint)
+python scripts/eval_rd.py --budgets 4 8 12 --dataset-size 24 --output runs/rd.json
+```
+
+Both commands emit JSON summaries (loss terms, accuracies, token usage) so the quickstart results can be versioned alongside the README benchmarks.
+
 ### Smoke tests
 
 A lightweight CI-friendly check executes the demo and benchmark harness:
@@ -221,7 +235,13 @@ Running the smoke tests locally mirrors the automation that keeps the public dem
 
 ## Benchmarks
 
-The `benchmarks/` package now ships with a synthetic doc-understanding harness that measures accuracy vs. token budget using the invoice dataset utilities and orchestration probes:
+The `benchmarks/` package now ships with a synthetic doc-understanding harness that measures accuracy vs. token budget using the invoice dataset utilities and orchestration probes. For a lightweight CLI that emits README-compatible JSON, run:
+
+```bash
+python scripts/eval_rd.py --budgets 4 8 12 --dataset-size 24 --output runs/rd.json
+```
+
+You can still invoke the richer benchmark module directly when you want orchestrator telemetry and STM probes:
 
 ```bash
 python -m benchmarks.doc_understanding
