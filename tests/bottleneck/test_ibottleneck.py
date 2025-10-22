@@ -1,11 +1,6 @@
-import os
-import sys
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-
 import pytest
 
-from nd_llm.bottleneck import IBottleneck
+from nd_llm.bottleneck import IBottleneck, QueryDotProductScoringStrategy
 from nd_llm.encoders import Encoder, LayoutEncoder, TextEncoder
 from nd_llm.registry import Registry
 
@@ -24,7 +19,7 @@ class MockEncoder:
         return self._embeddings
 
 
-def test_topk_selection_respects_budget():
+def test_topk_selection_respects_budget_and_telemetry():
     fields = {
         "text": ["alpha", "beta", "gamma"],
         "layout": ["b0", "b1"],
@@ -37,16 +32,69 @@ def test_topk_selection_respects_budget():
     bottleneck = IBottleneck(target_budget=3)
     result = bottleneck.compress(fields, encoders)
 
-    # The highest norms are: text[2], layout[1], text[1]
     assert result.telemetry.selected_indices["text"] == [1, 2]
     assert result.telemetry.selected_indices["layout"] == [1]
-
-    kept = sum(len(v) for v in result.telemetry.selected_indices.values())
-    assert kept == 3
+    assert result.telemetry.field_budgets["text"] == 2
+    assert result.telemetry.field_budgets["layout"] == 1
     assert result.metrics["information_bound"] == pytest.approx(3 / 5)
+    assert result.telemetry.dropped_indices["text"] == [0]
 
     reconstructed = bottleneck.decompress(result)
     assert reconstructed == result.compressed_fields
+
+
+def test_query_conditioned_scoring_prefers_query_aligned_tokens():
+    fields = {"text": ["zero", "one", "two"]}
+    encoders = {"text": MockEncoder([[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]])}
+    query_vector = [1.0, 0.0]
+
+    bottleneck = IBottleneck(
+        target_budget=1,
+        scorer=QueryDotProductScoringStrategy(mix_weight=1.0),
+    )
+    result = bottleneck.compress(fields, encoders, context={"query_embedding": query_vector})
+
+    assert result.telemetry.selected_indices["text"] == [0]
+    assert result.telemetry.field_budgets["text"] == 1
+    assert result.telemetry.selected_scores["text"][0] == pytest.approx(1.0)
+
+
+def test_budget_allocator_respects_salience_metadata():
+    registry = Registry()
+    registry.add_field("salient", keys=["doc_id"], salience=True)
+    registry.add_field("context", keys=["doc_id"])
+
+    fields = {
+        "salient": ["s0", "s1", "s2"],
+        "context": ["c0", "c1", "c2", "c3"],
+    }
+    encoders = {
+        "salient": MockEncoder([[0.6], [0.7], [0.8]]),
+        "context": MockEncoder([[0.1], [0.2], [0.3], [0.4]]),
+    }
+
+    bottleneck = IBottleneck(target_budget=3)
+    result = bottleneck.compress(fields, encoders, registry=registry)
+
+    assert result.telemetry.field_budgets["salient"] == 2
+    assert result.telemetry.field_budgets["context"] == 1
+    assert result.telemetry.allocation_weights["salient"] > result.telemetry.allocation_weights["context"]
+    assert sum(len(v) for v in result.telemetry.selected_indices.values()) == 3
+
+
+def test_metrics_report_information_proxies():
+    fields = {"text": ["low", "high"]}
+    encoders = {"text": MockEncoder([[1.0], [3.0]])}
+
+    bottleneck = IBottleneck(target_budget=1)
+    result = bottleneck.compress(fields, encoders)
+
+    metrics = result.metrics
+    assert metrics["information_bound"] == pytest.approx(0.5)
+    assert metrics["ib_proxy"] == pytest.approx(0.9)
+    assert metrics["rd_proxy"] == pytest.approx(0.5)
+    assert metrics["embedding_reconstruction_error"] == pytest.approx(2.0)
+    assert result.telemetry.dropped_indices["text"] == [0]
 
 
 def test_encoder_protocol_and_registry_compatibility():
@@ -57,6 +105,8 @@ def test_encoder_protocol_and_registry_compatibility():
     assert isinstance(layout_encoder, Encoder)
 
     registry = Registry()
+    registry.add_field("text", keys=["doc_id", "span_id"], salience=True)
+    registry.add_field("layout", keys=["doc_id", "span_id"])
     registry.register_encoder("text", text_encoder)
     registry.register_encoder("layout", layout_encoder)
 
@@ -66,7 +116,8 @@ def test_encoder_protocol_and_registry_compatibility():
     }
 
     bottleneck = IBottleneck(target_budget=2)
-    result = bottleneck.compress(fields, registry.encoders)
+    result = bottleneck.compress(fields, registry.encoders, registry=registry)
 
     assert set(result.telemetry.selected_indices.keys()) == {"text", "layout"}
     assert all(isinstance(v, list) for v in result.compressed_fields.values())
+    assert sum(result.telemetry.field_budgets.values()) == 2

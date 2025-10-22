@@ -121,7 +121,7 @@ enc_text   = TextEncoder(model="tiny-bert")
 enc_layout = LayoutEncoder(kind="xyxy")
 
 # 3) Variable‑rate bottleneck (target ~256 tokens eq.)
-ib = IBottleneck(target_budget="256t", objective="ib-rd")
+ib = IBottleneck(target_budget=256, objective="query-dot")
 
 # 4) Semantic Tensor Memory + Orchestrator
 stm = STM(store_dir="./stm")
@@ -134,16 +134,26 @@ fields = pack_fields(
 )
 
 # 6) Encode → compress → decode
+query_embedding = enc_text.encode([
+    "Summarize the invoice totals by vendor",
+])[0]
 Z = ib.compress(
-    encs={"text": enc_text(fields["text"]),
-          "bbox": enc_layout(fields["bbox"])},
+    fields,
+    encoders={"text": enc_text, "bbox": enc_layout},
     registry=reg,
-    query="Summarize the invoice totals by vendor",
+    context={"query_embedding": query_embedding},
 )
 
 answer = your_llm.decode(Z, prompt="Summarize the invoice totals by vendor")
 ctl.log_usage(example_id="doc_1", Z=Z, answer=answer)
 ```
+
+### Bottleneck tuning knobs
+
+* **Objective / scoring:** pass `objective="l2-norm"` (default) for magnitude gating or `objective="query-dot"` to enable the built-in query-conditioned scorer. You can also inject your own scorer via the `scorer` argument; it receives `(field, embeddings, metadata, context)` and should return a score per token.
+* **Query context:** provide query embeddings or other conditioning signals through the `context` mapping (e.g. `{"query_embedding": vector}`) and they will be forwarded to the scoring strategy.
+* **Budget allocator:** override `budget_allocator` to customize per-field sub-budgets. The default `RegistryAwareBudgetAllocator` inspects registry metadata (salience flags, alignment keys, optional `budget_weight`) and records the resulting `field_budgets` and `allocation_weights` in `CompressionTelemetry`.
+* **Metrics:** every call to `compress` returns a `CompressionResult.metrics` dictionary with IB/RD proxies such as `ib_proxy`, `rd_proxy`, and an `embedding_reconstruction_error` computed from kept vs. dropped embeddings.
 
 ### Minimal field‑registry (YAML)
 
