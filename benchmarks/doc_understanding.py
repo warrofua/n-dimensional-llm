@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+import math
+import random
+import time
+from collections import Counter, defaultdict
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 try:  # pragma: no cover - optional dependency for aggregation helpers
     import numpy as _np  # type: ignore
@@ -50,6 +54,10 @@ FieldsFn = Callable[[Mapping[str, Any]], FieldsDict]
 LabelFn = Callable[[Mapping[str, Any]], Any]
 PredictFn = Callable[[CompressionResult, Mapping[str, Any]], Any]
 MetadataFn = Callable[[Mapping[str, Any], CompressionResult], Mapping[str, Any]]
+AblationFn = Callable[
+    [Mapping[str, Any], Mapping[str, Sequence[MutableMapping[str, Any]]], int, int],
+    Mapping[str, List[MutableMapping[str, Any]]],
+]
 
 
 @dataclass
@@ -63,6 +71,7 @@ class BudgetRun:
     retention_probe: Dict[str, Any]
     metrics: Dict[str, float]
     cell_fusions: List[Dict[str, Any]] = field(default_factory=list)
+    ablations: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         payload = {
@@ -77,6 +86,8 @@ class BudgetRun:
         }
         if self.cell_fusions:
             payload["cell_fusions"] = [_serialise_cell_fusion(item) for item in self.cell_fusions]
+        if self.ablations:
+            payload["ablations"] = self.ablations
         return payload
 
 
@@ -92,6 +103,7 @@ def run_benchmark(
     registry = build_invoice_registry()
     encoders = build_invoice_encoders(registry)
     dataset = synthetic_invoice_dataset(dataset_size, seed=seed)
+    ablations = _invoice_ablation_suite(seed)
 
     runs: List[BudgetRun] = []
     predict_fn = _invoice_prediction_factory(threshold)
@@ -107,6 +119,7 @@ def run_benchmark(
             policy_name="synthetic-doc-benchmark",
             retention_probe_sample_size=5,
             seed=seed,
+            ablations=ablations,
         )
         runs.append(budget_run)
 
@@ -135,6 +148,7 @@ def run_funsd_benchmark(
     actual_size = len(dataset)
 
     runs: List[BudgetRun] = []
+    ablations = _funsd_ablation_suite(seed)
     for budget in budget_values:
         budget_run = _evaluate_budget(
             budget=int(budget),
@@ -147,6 +161,7 @@ def run_funsd_benchmark(
             policy_name="funsd-doc-benchmark",
             retention_probe_sample_size=3,
             seed=seed,
+            ablations=ablations,
         )
         runs.append(budget_run)
 
@@ -171,8 +186,13 @@ def _evaluate_budget(
     policy_name: str,
     retention_probe_sample_size: int,
     seed: int,
+    ablations: Optional[Mapping[str, "AblationFn"]] = None,
 ) -> BudgetRun:
     bottleneck = IBottleneck(target_budget=int(budget))
+
+    ablation_totals: Dict[str, Dict[str, Any]] = {}
+    if ablations:
+        ablation_totals = {name: _make_ablation_totals() for name in ablations}
 
     with TemporaryDirectory(prefix="ndllm-bench-") as tmp:
         storage_dir = Path(tmp)
@@ -191,6 +211,12 @@ def _evaluate_budget(
         kept_tokens: List[int] = []
         metric_totals: Dict[str, float] = defaultdict(float)
         cell_fusions: List[Dict[str, Any]] = []
+        total_latency = 0.0
+        total_flops = 0.0
+        total_pre_distortion = 0.0
+        total_post_distortion = 0.0
+        label_counts: Counter[Any] = Counter()
+
         for doc_index, document in enumerate(dataset):
             fields = fields_fn(document)
             cell_fusion = _build_cell_fusion(
@@ -200,9 +226,20 @@ def _evaluate_budget(
                 doc_index=doc_index,
             )
             cell_fusions.append(cell_fusion)
-            result = bottleneck.compress(fields, encoders=registry_encoders)
-            prediction = predict_fn(result, document)
+            registration_metrics = cell_fusion.get("registration", {})
+            total_pre_distortion += float(registration_metrics.get("pre_distortion", 0.0))
+            total_post_distortion += float(registration_metrics.get("post_distortion", 0.0))
+
             label = label_fn(document)
+            label_counts[label] += 1
+
+            start_time = time.perf_counter()
+            result = bottleneck.compress(fields, encoders=registry_encoders)
+            latency = time.perf_counter() - start_time
+            total_latency += latency
+            total_flops += _estimate_encoder_flops(fields, registry_encoders)
+
+            prediction = predict_fn(result, document)
             if prediction == label:
                 correct += 1
 
@@ -215,6 +252,7 @@ def _evaluate_budget(
                 "kept_tokens": kept,
                 "label": label,
                 "prediction": prediction,
+                "encoder_latency_seconds": latency,
             }
             if metadata_fn is not None:
                 extra = metadata_fn(document, result)
@@ -230,10 +268,62 @@ def _evaluate_budget(
             for key, value in result.metrics.items():
                 metric_totals[key] += float(value)
 
-        accuracy = correct / len(dataset) if dataset else 0.0
-        metrics = {key: value / len(dataset) for key, value in metric_totals.items()} if dataset else {}
+            if ablation_totals:
+                for name, ablation_fn in (ablations or {}).items():
+                    mutated_fields = ablation_fn(
+                        document,
+                        _clone_fields(fields),
+                        doc_index,
+                        seed,
+                    )
+                    ab_cell_fusion = _build_cell_fusion(
+                        document=document,
+                        fields=mutated_fields,
+                        encoders=registry_encoders,
+                        doc_index=doc_index,
+                    )
+                    ab_start = time.perf_counter()
+                    ab_result = bottleneck.compress(mutated_fields, encoders=registry_encoders)
+                    ab_latency = time.perf_counter() - ab_start
+                    ab_prediction = predict_fn(ab_result, document)
+                    ab_kept = sum(
+                        len(indices) for indices in ab_result.telemetry.selected_indices.values()
+                    )
+                    ab_metrics = ablation_totals[name]
+                    ab_metrics["count"] += 1
+                    if ab_prediction == label:
+                        ab_metrics["correct"] += 1
+                    ab_metrics["kept_tokens"].append(ab_kept)
+                    ab_metrics["latency"] += ab_latency
+                    ab_metrics["flops"] += _estimate_encoder_flops(mutated_fields, registry_encoders)
+                    for key, value in ab_result.metrics.items():
+                        ab_metrics["metrics"][key] += float(value)
+                    ab_reg = ab_cell_fusion.get("registration", {})
+                    ab_metrics["reg_pre"] += float(ab_reg.get("pre_distortion", 0.0))
+                    ab_metrics["reg_post"] += float(ab_reg.get("post_distortion", 0.0))
+                    ab_metrics["label_counts"][label] += 1
+
+        dataset_size = len(dataset)
+        accuracy = correct / dataset_size if dataset_size else 0.0
+        metrics = {key: value / dataset_size for key, value in metric_totals.items()} if dataset_size else {}
+
+        if dataset_size:
+            metrics["encoder_latency_seconds"] = total_latency / dataset_size
+            metrics["encoder_flops"] = total_flops / dataset_size
+            metrics["registration_pre_distortion"] = total_pre_distortion / dataset_size
+            metrics["registration_post_distortion"] = total_post_distortion / dataset_size
+
+        label_entropy = _entropy(label_counts)
+        metrics["label_entropy"] = label_entropy
+        mi_estimate = metrics.get("mi_lower_bound") or metrics.get("ib_proxy") or 0.0
+        conditional_entropy = max(0.0, label_entropy - mi_estimate)
+        metrics["conditional_entropy"] = conditional_entropy
+        metrics["fano_error_bound"] = _fano_lower_bound(conditional_entropy, len(label_counts))
+
         budget_probe = orchestrator.budget_sweep()
         retention_probe = orchestrator.run_retention_probe()
+
+    ablation_report = _summarise_ablations(ablation_totals)
 
     return BudgetRun(
         budget=budget,
@@ -243,7 +333,206 @@ def _evaluate_budget(
         retention_probe=retention_probe,
         metrics=metrics,
         cell_fusions=cell_fusions,
+        ablations=ablation_report,
     )
+
+
+def _make_ablation_totals() -> Dict[str, Any]:
+    return {
+        "correct": 0,
+        "count": 0,
+        "kept_tokens": [],
+        "metrics": defaultdict(float),
+        "latency": 0.0,
+        "flops": 0.0,
+        "reg_pre": 0.0,
+        "reg_post": 0.0,
+        "label_counts": Counter(),
+    }
+
+
+def _summarise_ablations(totals: Mapping[str, Dict[str, Any]]) -> Dict[str, Any]:
+    report: Dict[str, Any] = {}
+    for name, values in totals.items():
+        count = int(values.get("count", 0))
+        if count <= 0:
+            continue
+        metrics_dict = values.get("metrics", {})
+        averaged = {key: float(val) / count for key, val in metrics_dict.items()}
+        averaged["encoder_latency_seconds"] = float(values.get("latency", 0.0)) / count
+        averaged["encoder_flops"] = float(values.get("flops", 0.0)) / count
+        averaged["registration_pre_distortion"] = float(values.get("reg_pre", 0.0)) / count
+        averaged["registration_post_distortion"] = float(values.get("reg_post", 0.0)) / count
+
+        label_counts = values.get("label_counts", Counter())
+        averaged["label_entropy"] = _entropy(label_counts)
+        mi_est = averaged.get("mi_lower_bound") or averaged.get("ib_proxy") or 0.0
+        conditional = max(0.0, averaged["label_entropy"] - mi_est)
+        averaged["conditional_entropy"] = conditional
+        averaged["fano_error_bound"] = _fano_lower_bound(conditional, len(label_counts))
+
+        kept_tokens: Sequence[int] = values.get("kept_tokens", [])
+        report[name] = {
+            "accuracy": float(values.get("correct", 0)) / count,
+            "count": count,
+            "average_kept_tokens": sum(kept_tokens) / len(kept_tokens)
+            if kept_tokens
+            else 0.0,
+            "metrics": averaged,
+        }
+    return report
+
+
+def _estimate_encoder_flops(
+    fields: Mapping[str, Sequence[Any]],
+    encoders: Mapping[str, Any],
+) -> float:
+    total = 0.0
+    for field, entries in fields.items():
+        encoder = encoders.get(field)
+        if encoder is None:
+            continue
+        dim = getattr(encoder, "embedding_dim", 1)
+        count = len(entries)
+        total += float(count * max(dim, 1) * max(dim, 1))
+    return total
+
+
+def _entropy(counts: Mapping[Any, int]) -> float:
+    total = sum(int(v) for v in counts.values())
+    if total <= 0:
+        return 0.0
+    entropy = 0.0
+    for value in counts.values():
+        count = int(value)
+        if count <= 0:
+            continue
+        probability = count / total
+        entropy -= probability * math.log2(probability)
+    return float(entropy)
+
+
+def _fano_lower_bound(conditional_entropy: float, num_labels: int) -> float:
+    if num_labels <= 1:
+        return 0.0
+    denom = math.log2(float(num_labels))
+    if denom == 0:
+        return 0.0
+    return max(0.0, (conditional_entropy - 1.0) / denom)
+
+
+def _clone_fields(
+    fields: Mapping[str, Sequence[MutableMapping[str, Any]]]
+) -> Dict[str, List[MutableMapping[str, Any]]]:
+    materialised = {name: list(entries) for name, entries in fields.items()}
+    return deepcopy(materialised)
+
+
+def _drop_field_ablation(field: str) -> AblationFn:
+    def _apply(
+        _: Mapping[str, Any],
+        fields: Mapping[str, Sequence[MutableMapping[str, Any]]],
+        __: int,
+        ___: int,
+    ) -> Mapping[str, List[MutableMapping[str, Any]]]:
+        mutated = {name: list(entries) for name, entries in fields.items()}
+        mutated[field] = []
+        return mutated
+
+    return _apply
+
+
+def _noise_field_ablation(
+    field: str,
+    value_key: str,
+    *,
+    scale: float,
+) -> AblationFn:
+    def _apply(
+        _: Mapping[str, Any],
+        fields: Mapping[str, Sequence[MutableMapping[str, Any]]],
+        doc_index: int,
+        seed: int,
+    ) -> Mapping[str, List[MutableMapping[str, Any]]]:
+        mutated = {name: [dict(entry) for entry in entries] for name, entries in fields.items()}
+        rng = random.Random(seed * 97 + doc_index * 13 + hash(field))
+        updated: List[MutableMapping[str, Any]] = []
+        for entry in mutated.get(field, []):
+            value = entry.get(value_key)
+            try:
+                base = float(value)
+            except (TypeError, ValueError):
+                updated.append(entry)
+                continue
+            noise = rng.uniform(-scale, scale)
+            entry[value_key] = base + noise
+            updated.append(entry)
+        mutated[field] = updated
+        return mutated
+
+    return _apply
+
+
+def _perturb_layout_ablation(*, scale: float, field: str = "layout") -> AblationFn:
+    def _apply(
+        _: Mapping[str, Any],
+        fields: Mapping[str, Sequence[MutableMapping[str, Any]]],
+        doc_index: int,
+        seed: int,
+    ) -> Mapping[str, List[MutableMapping[str, Any]]]:
+        mutated = {name: [dict(entry) for entry in entries] for name, entries in fields.items()}
+        rng = random.Random(seed * 137 + doc_index * 19)
+        perturbed: List[MutableMapping[str, Any]] = []
+        for entry in mutated.get(field, []):
+            mutated_entry = dict(entry)
+            xyxy = list(mutated_entry.get("xyxy", []))
+            if len(xyxy) >= 4:
+                for idx in range(4):
+                    jitter = rng.uniform(-scale, scale)
+                    value = float(xyxy[idx]) if idx < len(xyxy) else 0.0
+                    xyxy[idx] = min(1.0, max(0.0, value + jitter))
+                mutated_entry["xyxy"] = xyxy
+            perturbed.append(mutated_entry)
+        mutated[field] = perturbed
+        return mutated
+
+    return _apply
+
+
+def _shuffle_field_ablation(field: str) -> AblationFn:
+    def _apply(
+        _: Mapping[str, Any],
+        fields: Mapping[str, Sequence[MutableMapping[str, Any]]],
+        doc_index: int,
+        seed: int,
+    ) -> Mapping[str, List[MutableMapping[str, Any]]]:
+        mutated = {name: [dict(entry) for entry in entries] for name, entries in fields.items()}
+        rng = random.Random(seed * 59 + doc_index * 17 + hash(field))
+        entries = mutated.get(field, [])
+        rng.shuffle(entries)
+        mutated[field] = entries
+        return mutated
+
+    return _apply
+
+
+def _invoice_ablation_suite(seed: int) -> Dict[str, AblationFn]:
+    return {
+        "drop_amount": _drop_field_ablation("amount"),
+        "drop_layout": _drop_field_ablation("layout"),
+        "noise_amount": _noise_field_ablation("amount", "amount", scale=25.0),
+        "perturb_layout": _perturb_layout_ablation(scale=0.05),
+        "shuffle_text": _shuffle_field_ablation("text"),
+    }
+
+
+def _funsd_ablation_suite(seed: int) -> Dict[str, AblationFn]:
+    return {
+        "drop_layout": _drop_field_ablation("layout"),
+        "drop_text": _drop_field_ablation("text"),
+        "perturb_layout": _perturb_layout_ablation(scale=0.02),
+        "shuffle_entities": _shuffle_field_ablation("entity"),
+    }
 
 
 def _invoice_prediction_factory(threshold: float) -> PredictFn:
@@ -310,6 +599,7 @@ def _build_cell_fusion(
     base_centers, coord_maps = _layout_coordinate_maps(layout_entries)
 
     field_entries: List[Dict[str, Any]] = []
+    all_coords: List[List[float]] = []
     for field, embeddings in encoded.items():
         if not embeddings:
             continue
@@ -320,12 +610,15 @@ def _build_cell_fusion(
             base_centers=base_centers,
             count=len(embeddings),
         )
+        all_coords.extend(coords)
         padded = _pad_field_embeddings(embeddings, target_dim)
         tokens_array = _to_backend_array(padded, backend)
         coords_array = _to_backend_array(coords, backend)
         field_entries.append({"tokens": tokens_array, "coords": coords_array})
 
     fused = aggregate_fields(field_entries, cell_centers, agg="mean", backend=backend)
+
+    registration = _registration_metrics(layout_entries, all_coords, cell_centers)
 
     document_id = (
         document.get("doc_id")
@@ -342,6 +635,7 @@ def _build_cell_fusion(
         "feature_dim": target_dim,
         "cells": _to_serialisable(fused),
         "centers": _to_serialisable(cell_centers),
+        "registration": registration,
     }
 
 
@@ -409,6 +703,54 @@ def _resolve_field_coordinates(
             centre = fallback[min(index, len(fallback) - 1)]
         coords.append([float(centre[0]), float(centre[1])])
     return coords
+
+
+def _registration_metrics(
+    layout_entries: Sequence[MutableMapping[str, Any]],
+    field_coords: Sequence[Sequence[float]],
+    cell_centers: Any,
+) -> Dict[str, Any]:
+    layout_centers = [_center_from_entry(entry) for entry in layout_entries if entry is not None]
+    canonical_centers = _flatten_centers(cell_centers)
+    pre = _average_nearest_distance(layout_centers, canonical_centers)
+    post = _average_nearest_distance(field_coords, canonical_centers)
+    return {
+        "pre_distortion": pre,
+        "post_distortion": post if field_coords else pre,
+        "layout_tokens": len(layout_centers),
+        "field_tokens": len(field_coords),
+    }
+
+
+def _flatten_centers(centers: Any) -> List[List[float]]:
+    serialised = _to_serialisable(centers)
+    flattened: List[List[float]] = []
+    for batch in serialised:
+        for coord in batch:
+            if isinstance(coord, Sequence) and len(coord) >= 2:
+                flattened.append([float(coord[0]), float(coord[1])])
+    return flattened
+
+
+def _average_nearest_distance(
+    points: Sequence[Sequence[float]],
+    centres: Sequence[Sequence[float]],
+) -> float:
+    if not points or not centres:
+        return 0.0
+    total = 0.0
+    for point in points:
+        distances = [_euclidean_distance(point, centre) for centre in centres]
+        total += min(distances) if distances else 0.0
+    return total / max(len(points), 1)
+
+
+def _euclidean_distance(a: Sequence[float], b: Sequence[float]) -> float:
+    if len(a) < 2 or len(b) < 2:
+        return 0.0
+    dy = float(a[0]) - float(b[0])
+    dx = float(a[1]) - float(b[1])
+    return math.sqrt(dy * dy + dx * dx)
 
 
 def _pad_field_embeddings(vectors: Sequence[Sequence[float]], target_dim: int) -> List[List[float]]:
@@ -492,7 +834,7 @@ def _mean_coords(values: Sequence[Sequence[float]]) -> List[float]:
 
 
 def _serialise_cell_fusion(fusion: Mapping[str, Any]) -> Dict[str, Any]:
-    return {
+    payload = {
         "document_id": str(fusion.get("document_id", "")),
         "document_index": int(fusion.get("document_index", 0)),
         "backend": fusion.get("backend"),
@@ -501,6 +843,15 @@ def _serialise_cell_fusion(fusion: Mapping[str, Any]) -> Dict[str, Any]:
         "cells": _copy_nested_list(fusion.get("cells", [])),
         "centers": _copy_nested_list(fusion.get("centers", [])),
     }
+    registration = fusion.get("registration")
+    if isinstance(registration, Mapping):
+        payload["registration"] = {
+            "pre_distortion": float(registration.get("pre_distortion", 0.0)),
+            "post_distortion": float(registration.get("post_distortion", 0.0)),
+            "layout_tokens": int(registration.get("layout_tokens", 0)),
+            "field_tokens": int(registration.get("field_tokens", 0)),
+        }
+    return payload
 
 
 def _copy_nested_list(value: Any) -> Any:

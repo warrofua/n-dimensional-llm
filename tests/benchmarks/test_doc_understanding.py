@@ -26,6 +26,15 @@ def test_run_benchmark_smoke() -> None:
         assert isinstance(entry["metrics"], dict)
         assert "cell_fusions" in entry
         assert isinstance(entry["cell_fusions"], list)
+        assert "ablations" in entry
+        assert isinstance(entry["ablations"], dict)
+        assert "encoder_latency_seconds" in entry["metrics"]
+        assert "fano_error_bound" in entry["metrics"]
+        assert "registration_pre_distortion" in entry["metrics"]
+        if entry["ablations"]:
+            for ablation in entry["ablations"].values():
+                assert "metrics" in ablation
+                assert "accuracy" in ablation
 
 
 def test_run_funsd_benchmark_smoke() -> None:
@@ -42,3 +51,5 @@ def test_run_funsd_benchmark_smoke() -> None:
     assert isinstance(entry["metrics"], dict)
     assert "cell_fusions" in entry
     assert entry["cell_fusions"]
+    assert "ablations" in entry
+    assert isinstance(entry["ablations"], dict)

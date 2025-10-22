@@ -111,6 +111,7 @@ class CanonicalCellAggregator:
                     field_name,
                     idx,
                 )
+                coords = self._extract_coords(entry)
                 metadata: Dict[str, Any] = {
                     "field": field_name,
                     "keys": tuple(key_values),
@@ -119,6 +120,8 @@ class CanonicalCellAggregator:
                     "value": self._select_value(entry, value_key),
                     "sort_key": sort_key,
                 }
+                if coords is not None:
+                    metadata["coords"] = tuple(float(value) for value in coords)
                 per_doc[doc_key].append((projected[idx], metadata))
 
         doc_order: List[str]
@@ -199,6 +202,19 @@ class CanonicalCellAggregator:
         if isinstance(entry, Mapping) and value_key in entry:
             return entry[value_key]
         return entry
+
+    def _extract_coords(self, entry: Any) -> Optional[Sequence[float]]:
+        if isinstance(entry, Mapping):
+            if "xyxy" in entry and isinstance(entry["xyxy"], Sequence):
+                return [float(value) for value in entry["xyxy"][:4]]
+            coords = entry.get("coords")
+            if isinstance(coords, Sequence):
+                return [float(value) for value in coords[:4]]
+            if all(key in entry for key in ("x", "y")):
+                return [float(entry.get("x", 0.0)), float(entry.get("y", 0.0))]
+        if isinstance(entry, Sequence) and not isinstance(entry, (str, bytes, bytearray)):
+            return [float(value) for value in entry[:4]]
+        return None
 
     @staticmethod
     def _resolve_key_tuple(entry: Mapping[str, Any], keys: Sequence[str]) -> Tuple[Any, ...]:
