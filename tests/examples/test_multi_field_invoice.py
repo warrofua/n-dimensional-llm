@@ -20,3 +20,14 @@ def test_multi_field_invoice_example(tmp_path: Path) -> None:
     retention = summary["retention_probe"]
     assert retention["total_retained"] >= 1
     assert summary["stm_key"] in retention["sampled_keys"]
+
+    fusion = summary["cell_fusion"]
+    assert fusion["grid_hw"] == [16, 12]
+    assert fusion["feature_dim"] >= 0
+    cells = fusion["cells"]
+    assert isinstance(cells, list)
+    assert len(cells) == 1
+    expected_cells = fusion["grid_hw"][0] * fusion["grid_hw"][1]
+    assert len(cells[0]) == expected_cells
+    if fusion["feature_dim"] > 0 and cells[0]:
+        assert all(len(vector) == fusion["feature_dim"] for vector in cells[0])

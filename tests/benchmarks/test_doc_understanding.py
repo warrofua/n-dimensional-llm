@@ -24,6 +24,8 @@ def test_run_benchmark_smoke() -> None:
         assert isinstance(entry["budget_probe"], dict)
         assert isinstance(entry["retention_probe"], dict)
         assert isinstance(entry["metrics"], dict)
+        assert "cell_fusions" in entry
+        assert isinstance(entry["cell_fusions"], list)
 
 
 def test_run_funsd_benchmark_smoke() -> None:
@@ -38,3 +40,5 @@ def test_run_funsd_benchmark_smoke() -> None:
     assert entry["budget"] == 6
     assert 0.0 <= entry["accuracy"] <= 1.0
     assert isinstance(entry["metrics"], dict)
+    assert "cell_fusions" in entry
+    assert entry["cell_fusions"]
