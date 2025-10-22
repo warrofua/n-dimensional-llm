@@ -7,10 +7,16 @@ from typing import Any
 
 __all__ = [
     "run_benchmark",
+    "run_funsd_benchmark",
     "AmountEncoder",
     "build_invoice_encoders",
     "build_invoice_registry",
+    "build_funsd_encoders",
+    "build_funsd_registry",
+    "funsd_fields",
+    "funsd_numeric_answer_label",
     "invoice_fields",
+    "load_funsd_dataset",
     "synthetic_invoice",
     "synthetic_invoice_dataset",
 ]
@@ -19,6 +25,8 @@ __all__ = [
 def __getattr__(name: str) -> Any:  # pragma: no cover - thin convenience wrapper
     if name == "run_benchmark":
         return import_module("benchmarks.doc_understanding").run_benchmark
+    if name == "run_funsd_benchmark":
+        return import_module("benchmarks.doc_understanding").run_funsd_benchmark
     if name in {
         "AmountEncoder",
         "build_invoice_encoders",
@@ -28,6 +36,15 @@ def __getattr__(name: str) -> Any:  # pragma: no cover - thin convenience wrappe
         "synthetic_invoice_dataset",
     }:
         module = import_module("benchmarks.synthetic")
+        return getattr(module, name)
+    if name in {
+        "build_funsd_encoders",
+        "build_funsd_registry",
+        "funsd_fields",
+        "funsd_numeric_answer_label",
+        "load_funsd_dataset",
+    }:
+        module = import_module("benchmarks.funsd")
         return getattr(module, name)
     raise AttributeError(f"module 'benchmarks' has no attribute {name!r}")
 
