@@ -114,62 +114,57 @@ pip install -e .
 ### “Hello, N‑D” (pseudo‑Python)
 
 ```python
-from nd_llm import IBottleneck, Orchestrator, Registry, STM, UsageEvent, pack_fields
+from nd_llm import (
+    IBottleneck,
+    Orchestrator,
+    Registry,
+    STM,
+    UsageEvent,
+    CompressionRecord,
+    pack_fields,
+)
 from nd_llm.encoders import LayoutEncoder, TextEncoder
 
-# 1) Declare fields, alignment + register encoders
-reg = Registry()
-reg.add_field("text", keys=["doc_id", "span_id"], salience=True)
-reg.add_field("bbox", keys=["doc_id", "span_id"])  # layout boxes per span
-reg.register_encoder("text", TextEncoder())
-reg.register_encoder("bbox", LayoutEncoder())
+# 1) Register fields + encoders
+registry = Registry()
+registry.add_field("text", keys=["doc_id", "span_id"], salience=True)
+registry.add_field("bbox", keys=["doc_id", "span_id"])
+registry.register_encoder("text", TextEncoder())
+registry.register_encoder("bbox", LayoutEncoder())
 
-# 2) Core components (variable-rate bottleneck + STM orchestrator)
-ib = IBottleneck(target_budget=256)
-stm = STM.from_path("./stm")
-ctl = Orchestrator.from_components(
+# 2) Pack aligned examples
+spans = [("hello", True), ("world", False)]
+boxes = [(0, 0, 1, 1), (1, 1, 2, 2)]
+fields = pack_fields(
+    text=[
+        {"doc_id": 1, "span_id": idx, "text": text, "salience": salience}
+        for idx, (text, salience) in enumerate(spans)
+    ],
+    bbox=[
+        {"doc_id": 1, "span_id": idx, "xyxy": box}
+        for idx, box in enumerate(boxes)
+    ],
+)
+batches = fields.to_field_batches({"text": "text"})
+
+# 3) Compress with the information bottleneck
+bottleneck = IBottleneck(target_budget=2, objective="query-dot")
+result = bottleneck.compress(batches, registry.encoders)
+
+# 4) Persist usage + telemetry via the orchestrator
+stm = STM.from_path("./stm-store")
+orchestrator = Orchestrator.from_components(
     stm=stm,
-    bottleneck=ib,
+    bottleneck=bottleneck,
     target_budget=1.0,
     policy_name="demo",
 )
-
-# 3) Ingest a document page
-# 2) Build encoders
-enc_text   = TextEncoder(model="tiny-bert")
-enc_layout = LayoutEncoder(kind="xyxy")
-
-# 3) Variable‑rate bottleneck (target ~256 tokens eq.)
-ib = IBottleneck(target_budget=256, objective="query-dot")
-
-# 4) Semantic Tensor Memory + Orchestrator
-stm = STM(store_dir="./stm")
-ctl = Orchestrator(stm=stm, bottleneck=ib)
-
-# 5) Ingest a document page
-fields = pack_fields(
-    text=[{"doc_id": 1, "span_id": i, "text": t, "salience": s} for i, (t, s) in enumerate(spans)],
-    bbox=[{"doc_id": 1, "span_id": i, "xyxy": b} for i, b in enumerate(boxes)],
-)
-field_batches = fields.to_field_batches({"text": "text"})
-
-# 4) Encode → compress → log usage metadata
-compression = ib.compress(field_batches, reg.encoders)
-ctl.log_usage_event(
+usage_key = orchestrator.log_usage_event(
     UsageEvent(
-        tensor=compression.telemetry.selected_scores.get("text", []),
-        metadata={"doc_id": 1, "policy": ctl.config.policy_name},
+        tensor=result.telemetry.selected_scores.get("text", []),
+        metadata=fields.key_rows[0],
+        compression=CompressionRecord.from_result(result, bottleneck=bottleneck),
     )
-
-# 6) Encode → compress → decode
-query_embedding = enc_text.encode([
-    "Summarize the invoice totals by vendor",
-])[0]
-Z = ib.compress(
-    fields,
-    encoders={"text": enc_text, "bbox": enc_layout},
-    registry=reg,
-    context={"query_embedding": query_embedding},
 )
 ```
 

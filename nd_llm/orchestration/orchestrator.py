@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Sequence as SequenceABC
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Union
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 from nd_llm.bottleneck.ib import CompressionResult, CompressionTelemetry, IBottleneck
 from nd_llm.orchestration.budget import (
@@ -20,10 +20,6 @@ from nd_llm.orchestration.budget import (
 from nd_llm.stm import STM, TensorLike
 from nd_llm.utils.config import OrchestratorConfig
 
-if TYPE_CHECKING:  # pragma: no cover - imported for typing only
-    from nd_llm.bottleneck import IBottleneck
-
-
 def _to_serialisable(value: Any) -> Any:
     """Convert values to JSON-serialisable structures."""
 
@@ -34,6 +30,40 @@ def _to_serialisable(value: Any) -> Any:
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     return value
+
+
+def _iterable_to_list(value: Any) -> List[Any]:
+    """Normalise common iterable types (including numpy arrays) to a list."""
+
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, set):
+        return [item for item in value]
+    if isinstance(value, SequenceABC) and not isinstance(value, (str, bytes, bytearray)):
+        return list(value)
+    return []
+
+
+def _coerce_int(value: Any) -> int:
+    """Best-effort conversion of arbitrary values to integers."""
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coerce_float(value: Any) -> float:
+    """Best-effort conversion of arbitrary values to floats."""
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 @dataclass
@@ -56,8 +86,7 @@ class CompressionRecord:
         retained = 0
         if isinstance(selected, Mapping):
             for value in selected.values():
-                if isinstance(value, Sequence):
-                    retained += len(value)
+                retained += len(_iterable_to_list(value))
 
         ratio = float(retained) / float(total_tokens) if total_tokens else 0.0
         return {
@@ -71,7 +100,7 @@ class CompressionRecord:
             "compressed_fields": {
                 str(field): [
                     _to_serialisable(item)
-                    for item in sequence
+                    for item in _iterable_to_list(sequence)
                 ]
                 for field, sequence in self.compressed_fields.items()
             },
@@ -96,31 +125,46 @@ class CompressionRecord:
         selected_indices: Dict[str, List[int]] = {}
         if isinstance(selected_indices_raw, Mapping):
             for field, indices in selected_indices_raw.items():
-                if isinstance(indices, Sequence):
-                    selected_indices[str(field)] = [int(i) for i in indices]
-                else:
-                    selected_indices[str(field)] = []
+                selected_indices[str(field)] = [_coerce_int(i) for i in _iterable_to_list(indices)]
 
         selected_scores: Dict[str, List[float]] = {}
         if isinstance(selected_scores_raw, Mapping):
             for field, scores in selected_scores_raw.items():
-                if isinstance(scores, Sequence):
-                    selected_scores[str(field)] = [float(score) for score in scores]
-                else:
-                    selected_scores[str(field)] = []
+                selected_scores[str(field)] = [_coerce_float(score) for score in _iterable_to_list(scores)]
 
         token_counts: Dict[str, int] = {}
         if isinstance(token_counts_raw, Mapping):
             for field, count in token_counts_raw.items():
-                token_counts[str(field)] = int(count)
+                token_counts[str(field)] = _coerce_int(count)
 
         budget = int(budget_raw) if isinstance(budget_raw, (int, float)) else sum(token_counts.values())
+
+        field_budgets_raw = telemetry.get("field_budgets", {})
+        field_budgets: Dict[str, int] = {}
+        if isinstance(field_budgets_raw, Mapping):
+            for field, value in field_budgets_raw.items():
+                field_budgets[str(field)] = _coerce_int(value)
+
+        allocation_weights_raw = telemetry.get("allocation_weights", {})
+        allocation_weights: Dict[str, float] = {}
+        if isinstance(allocation_weights_raw, Mapping):
+            for field, value in allocation_weights_raw.items():
+                allocation_weights[str(field)] = _coerce_float(value)
+
+        dropped_indices_raw = telemetry.get("dropped_indices", {})
+        dropped_indices: Dict[str, List[int]] = {}
+        if isinstance(dropped_indices_raw, Mapping):
+            for field, indices in dropped_indices_raw.items():
+                dropped_indices[str(field)] = [_coerce_int(i) for i in _iterable_to_list(indices)]
 
         telemetry_obj = CompressionTelemetry(
             selected_indices=selected_indices,
             selected_scores=selected_scores,
             token_counts=token_counts,
             budget=budget,
+            field_budgets=field_budgets,
+            allocation_weights=allocation_weights,
+            dropped_indices=dropped_indices,
         )
 
         return CompressionResult(
@@ -146,12 +190,44 @@ class CompressionRecord:
 
         return cls(
             compressed_fields={
-                str(field): list(sequence) if isinstance(sequence, Sequence) else []
+                str(field): _iterable_to_list(sequence)
                 for field, sequence in _ensure_mapping(compressed_fields).items()
             },
             telemetry=_ensure_mapping(telemetry),
             metrics={str(name): float(val) for name, val in _ensure_mapping(metrics).items()},
             bottleneck=str(bottleneck) if bottleneck is not None else None,
+        )
+
+    @classmethod
+    def from_result(
+        cls,
+        result: CompressionResult,
+        *,
+        bottleneck: Optional[Union[str, IBottleneck]] = None,
+    ) -> "CompressionRecord":
+        """Create a record directly from a :class:`CompressionResult`."""
+
+        telemetry = result.telemetry
+        if isinstance(bottleneck, IBottleneck):
+            bottleneck_name: Optional[str] = bottleneck.__class__.__name__
+        else:
+            bottleneck_name = str(bottleneck) if bottleneck is not None else None
+
+        telemetry_payload: Dict[str, Any] = {
+            "selected_indices": telemetry.selected_indices,
+            "selected_scores": telemetry.selected_scores,
+            "token_counts": telemetry.token_counts,
+            "budget": telemetry.budget,
+            "field_budgets": getattr(telemetry, "field_budgets", {}),
+            "allocation_weights": getattr(telemetry, "allocation_weights", {}),
+            "dropped_indices": getattr(telemetry, "dropped_indices", {}),
+        }
+
+        return cls(
+            compressed_fields=result.compressed_fields,
+            telemetry=telemetry_payload,
+            metrics=result.metrics,
+            bottleneck=bottleneck_name,
         )
 
 
