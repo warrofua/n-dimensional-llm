@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -15,9 +15,19 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    Union,
 )
 
 from nd_llm.encoders import Encoder
+from .learnable import LearnableScoringStrategy, configure_scorer
+
+try:  # pragma: no cover - torch is an optional heavy dependency during import
+    import torch
+    from torch import Tensor, nn
+except ModuleNotFoundError:  # pragma: no cover
+    torch = None  # type: ignore[assignment]
+    Tensor = Any  # type: ignore[assignment]
+    nn = Any  # type: ignore[assignment]
 
 if TYPE_CHECKING:  # pragma: no cover - imported for type checking only
     from nd_llm.registry import FieldSpec, Registry
@@ -26,7 +36,8 @@ ScoreVector = List[float]
 Embedding = Sequence[float]
 EmbeddingBatch = Sequence[Embedding]
 FieldMetadata = Mapping[str, Any]
-ScoringFn = Callable[[str, EmbeddingBatch, FieldMetadata, Mapping[str, Any]], ScoreVector]
+ScoreOutput = Union[ScoreVector, "Tensor"]
+ScoringFn = Callable[[str, EmbeddingBatch, FieldMetadata, Mapping[str, Any]], ScoreOutput]
 BudgetAllocation = Tuple[Dict[str, int], Dict[str, float]]
 BudgetAllocatorFn = Callable[[Mapping[str, Sequence[float]], Mapping[str, FieldMetadata], int], BudgetAllocation]
 
@@ -51,6 +62,7 @@ class CompressionResult:
     compressed_fields: Dict[str, List[Any]]
     telemetry: CompressionTelemetry
     metrics: Dict[str, float]
+    loss_terms: Dict[str, Any] = field(default_factory=dict)
 
 
 class NormScoringStrategy:
@@ -248,14 +260,29 @@ class IBottleneck:
         *,
         objective: Optional[str] = None,
         scorer: Optional[ScoringFn] = None,
+        scorer_config: Optional[Mapping[str, Any]] = None,
+        learnable_scorer: Optional[nn.Module] = None,
         budget_allocator: Optional[BudgetAllocatorFn] = None,
     ) -> None:
         if target_budget <= 0:
             raise ValueError("target_budget must be positive")
         self.target_budget = int(target_budget)
         self.objective = (objective or "l2-norm").lower()
+        configured_module: Optional[nn.Module] = None
+        if scorer_config is not None:
+            if scorer is not None:
+                raise ValueError("specify either 'scorer' or 'scorer_config', not both")
+            scorer, configured_module = configure_scorer(scorer_config)
+        if learnable_scorer is None and configured_module is not None:
+            learnable_scorer = configured_module
+        if learnable_scorer is not None and torch is None:  # pragma: no cover - defensive
+            raise RuntimeError("torch is required when supplying a learnable scorer")
+        if learnable_scorer is not None and scorer is None:
+            scorer = LearnableScoringStrategy(learnable_scorer)
+        self.learnable_scorer: Optional[nn.Module] = learnable_scorer
         self.scorer = scorer or self._resolve_objective(self.objective)
         self.budget_allocator = budget_allocator or RegistryAwareBudgetAllocator()
+        self._score_tensors: Dict[str, Tensor] = {}
 
     def compress(
         self,
@@ -272,6 +299,7 @@ class IBottleneck:
 
         encoded = self._encode_fields(fields, encoders)
         scoring_context = context or {}
+        self._score_tensors.clear()
         gating_scores = self._compute_scores(encoded, metadata, scoring_context)
 
         field_budgets, allocation_weights = self.budget_allocator(gating_scores, metadata, self.target_budget)
@@ -301,10 +329,12 @@ class IBottleneck:
             dropped_indices=dropped_indices,
         )
         metrics = self._compute_metrics(encoded, telemetry)
+        loss_terms = self._compute_loss_terms(encoded)
         return CompressionResult(
             compressed_fields=compressed_fields,
             telemetry=telemetry,
             metrics=metrics,
+            loss_terms=loss_terms,
         )
 
     def decompress(self, result: CompressionResult) -> Dict[str, List[Any]]:
@@ -338,11 +368,23 @@ class IBottleneck:
     ) -> Dict[str, List[float]]:
         scores: Dict[str, List[float]] = {}
         for field, embeddings in encoded.items():
-            field_scores = self.scorer(field, embeddings, metadata.get(field, {}), context)
+            raw_scores = self.scorer(field, embeddings, metadata.get(field, {}), context)
+            tensor: Optional[Tensor] = None
+            if torch is not None and torch.is_tensor(raw_scores):
+                tensor = raw_scores.squeeze(-1) if raw_scores.ndim > 1 else raw_scores
+                if tensor.ndim != 1:
+                    raise ValueError(
+                        "learnable scorer must return a 1D tensor of per-token scores"
+                    )
+                field_scores = [float(v) for v in tensor.detach().cpu().tolist()]
+            else:
+                field_scores = [float(v) for v in raw_scores]
             if len(field_scores) != len(embeddings):
                 raise ValueError(
                     f"scoring strategy returned {len(field_scores)} scores for {len(embeddings)} embeddings in field '{field}'"
                 )
+            if tensor is not None:
+                self._score_tensors[field] = tensor
             scores[field] = field_scores
         return scores
 
@@ -392,6 +434,47 @@ class IBottleneck:
         }
         metrics.update(self._compute_information_proxies(encoded, telemetry))
         return metrics
+
+    def _compute_loss_terms(
+        self,
+        encoded: Mapping[str, List[List[float]]],
+    ) -> Dict[str, Tensor]:
+        if self.learnable_scorer is None or not self._score_tensors or torch is None:
+            return {}
+        base_tensor = next(iter(self._score_tensors.values()), None)
+        if base_tensor is None:
+            return {}
+        device = base_tensor.device
+        dtype = base_tensor.dtype
+        kept_energy = torch.zeros(1, device=device, dtype=dtype)
+        total_energy = torch.zeros(1, device=device, dtype=dtype)
+        total_probs = torch.zeros(1, device=device, dtype=dtype)
+        total_tokens = 0
+        for field, logits in self._score_tensors.items():
+            embeddings = encoded.get(field)
+            if not embeddings:
+                continue
+            embedding_tensor = torch.as_tensor(embeddings, device=device, dtype=dtype)
+            energy = (embedding_tensor * embedding_tensor).sum(dim=-1)
+            probs = torch.sigmoid(logits)
+            kept_energy = kept_energy + (probs * energy).sum()
+            total_energy = total_energy + energy.sum()
+            total_probs = total_probs + probs.sum()
+            total_tokens += embedding_tensor.size(0)
+        if total_tokens == 0:
+            return {}
+        eps = torch.finfo(dtype).eps
+        denom = total_energy + eps
+        ib_proxy = kept_energy / denom
+        dropped_energy = total_energy - kept_energy
+        token_normaliser = torch.tensor(float(total_tokens), device=device, dtype=dtype)
+        rd_proxy = dropped_energy / (token_normaliser + eps)
+        expected_keep_rate = total_probs / token_normaliser
+        return {
+            "ib_proxy": ib_proxy.squeeze(0),
+            "rd_proxy": rd_proxy.squeeze(0),
+            "expected_keep_rate": expected_keep_rate.squeeze(0),
+        }
 
     def _compute_information_proxies(
         self,

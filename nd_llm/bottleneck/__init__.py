@@ -7,6 +7,7 @@ from .ib import (
     QueryDotProductScoringStrategy,
     RegistryAwareBudgetAllocator,
 )
+from .learnable import LearnableScoringStrategy, LearnableTokenScorer, configure_scorer
 
 __all__ = [
     "IBottleneck",
@@ -15,4 +16,7 @@ __all__ = [
     "NormScoringStrategy",
     "QueryDotProductScoringStrategy",
     "RegistryAwareBudgetAllocator",
+    "LearnableTokenScorer",
+    "LearnableScoringStrategy",
+    "configure_scorer",
 ]
