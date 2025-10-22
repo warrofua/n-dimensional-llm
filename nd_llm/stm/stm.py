@@ -10,7 +10,7 @@ import threading
 import zlib
 from array import array
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, Mapping, MutableMapping, Optional, Sequence, Union
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Union
 
 from nd_llm.utils.config import STMConfig
 
@@ -184,6 +184,14 @@ class STM:
         matches = self.query(metadata_filter={"alignment_key": alignment_key}, limit=limit)
         return [key for key, _ in matches]
 
+    def list_by_task(self, task: str, limit: Optional[int] = None) -> Sequence[str]:
+        matches = self.query(metadata_filter={"task": task}, limit=limit)
+        return [key for key, _ in matches]
+
+    def list_by_layout(self, layout_signature: str, limit: Optional[int] = None) -> Sequence[str]:
+        matches = self.query(metadata_filter={"layout_signature": layout_signature}, limit=limit)
+        return [key for key, _ in matches]
+
     def __contains__(self, key: str) -> bool:
         with self._lock:
             return key in self._index
@@ -329,6 +337,80 @@ class STM:
                 if isinstance(budget, (int, float)):
                     annotations["compression_budget"] = float(budget)
 
+            fields_info = compression_data.get("fields")
+            if isinstance(fields_info, Mapping):
+                names = fields_info.get("names")
+                if isinstance(names, (list, tuple, set)):
+                    annotations["compression_fields"] = [str(name) for name in names]
+                counts = fields_info.get("counts")
+                if isinstance(counts, Mapping):
+                    annotations["compression_field_counts"] = {
+                        str(field): int(value)
+                        for field, value in counts.items()
+                        if isinstance(value, (int, float))
+                    }
+
+            idx_cells = compression_data.get("idx_cells")
+            if isinstance(idx_cells, Mapping):
+                def _normalise_index_map(value: Any) -> Dict[str, List[int]]:
+                    if not isinstance(value, Mapping):
+                        return {}
+                    result: Dict[str, List[int]] = {}
+                    for field, entries in value.items():
+                        normalised: List[int] = []
+                        if isinstance(entries, Mapping):
+                            entries = entries.values()
+                        for raw in (entries if isinstance(entries, (list, tuple, set, frozenset)) else [entries]):
+                            try:
+                                normalised.append(int(raw))
+                            except (TypeError, ValueError):
+                                continue
+                        if normalised:
+                            result[str(field)] = normalised
+                    return result
+
+                kept_map = _normalise_index_map(idx_cells.get("kept"))
+                if kept_map:
+                    annotations["idx_cells_kept"] = kept_map
+
+                dropped_map = _normalise_index_map(idx_cells.get("dropped"))
+                if dropped_map:
+                    annotations["idx_cells_dropped"] = dropped_map
+
+                canonical_raw = idx_cells.get("canonical")
+                canonical_map: Dict[str, List[str]] = {}
+                if isinstance(canonical_raw, Mapping):
+                    for field, values in canonical_raw.items():
+                        if isinstance(values, Mapping):
+                            values = values.values()
+                        if isinstance(values, (list, tuple, set, frozenset)):
+                            serialised = [str(item) for item in values if item is not None]
+                        elif values is None:
+                            serialised = []
+                        else:
+                            serialised = [str(values)]
+                        if serialised:
+                            canonical_map[str(field)] = serialised
+                if canonical_map:
+                    annotations["canonical_cells"] = canonical_map
+                    signature = _canonical_layout_signature(canonical_map)
+                    if signature:
+                        annotations.setdefault("layout_signature", signature)
+
+        if isinstance(metadata, Mapping):
+            task = metadata.get("task")
+            if isinstance(task, str):
+                annotations["task"] = task
+            layout_signature_value = metadata.get("layout_signature")
+            if isinstance(layout_signature_value, str):
+                annotations.setdefault("layout_signature", layout_signature_value)
+            k_value = metadata.get("K")
+            if isinstance(k_value, (int, float)):
+                annotations["K"] = float(k_value)
+            mi_lb = metadata.get("mi_lb")
+            if isinstance(mi_lb, (int, float)):
+                annotations["mi_lb"] = float(mi_lb)
+
         alignment_key = metadata.get("alignment_key") if isinstance(metadata, Mapping) else None
         if isinstance(alignment_key, str):
             annotations["alignment_key"] = alignment_key
@@ -350,6 +432,24 @@ class STM:
         with tmp_path.open("w", encoding="utf-8") as fh:
             json.dump(self._index, fh, indent=2, sort_keys=True)
         tmp_path.replace(self._index_path)
+
+
+def _canonical_layout_signature(canonical: Mapping[str, Sequence[Any]]) -> Optional[str]:
+    parts: list[str] = []
+    for field in sorted(canonical):
+        values = canonical[field]
+        if isinstance(values, (list, tuple, set, frozenset)):
+            serialised = [str(item) for item in values if item is not None]
+        elif values is None:
+            serialised = []
+        else:
+            serialised = [str(values)]
+        if serialised:
+            parts.append(f"{field}:{','.join(serialised)}")
+    if not parts:
+        return None
+    payload = "|".join(parts)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
 __all__ = ["STM", "TensorLike"]
