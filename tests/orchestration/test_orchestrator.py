@@ -195,4 +195,7 @@ def test_retention_probe_reports_reconstruction(tmp_path) -> None:
     assert probe["issues"] == []
     reconstruction = probe["reconstruction"]
     assert reconstruction["sample_size"] == 2
-    assert 0.0 < reconstruction["mean_quality"] <= 1.0
+    assert 0.0 <= reconstruction["mean_quality"] <= 1.0
+    assert 0.0 <= reconstruction["mean_retained_ratio"] <= 1.0
+    assert reconstruction["mean_mse"] >= 0.0
+    assert len(reconstruction.get("details", [])) == 2

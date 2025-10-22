@@ -89,9 +89,24 @@ class CompressionRecord:
                 retained += len(_iterable_to_list(value))
 
         ratio = float(retained) / float(total_tokens) if total_tokens else 0.0
+        dropped = float(total_tokens - retained) if total_tokens else 0.0
+        regenerated = dropped
+        residual_stats = self.telemetry.get("residual_statistics", {})
+        if isinstance(residual_stats, Mapping):
+            regenerated_total = 0.0
+            for stats in residual_stats.values():
+                if isinstance(stats, Mapping):
+                    try:
+                        regenerated_total += float(stats.get("dropped_count", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        continue
+            if regenerated_total:
+                regenerated = float(regenerated_total)
         return {
             "tokens_total": float(total_tokens),
             "tokens_retained": float(retained),
+            "tokens_dropped": float(dropped),
+            "tokens_regenerated": float(regenerated),
             "compression_ratio": ratio,
         }
 
@@ -157,6 +172,44 @@ class CompressionRecord:
             for field, indices in dropped_indices_raw.items():
                 dropped_indices[str(field)] = [_coerce_int(i) for i in _iterable_to_list(indices)]
 
+        residual_stats_raw = telemetry.get("residual_statistics", {})
+        residual_statistics: Dict[str, Dict[str, float]] = {}
+        if isinstance(residual_stats_raw, Mapping):
+            for field, stats in residual_stats_raw.items():
+                if isinstance(stats, Mapping):
+                    residual_statistics[str(field)] = {
+                        str(name): _coerce_float(value)
+                        for name, value in stats.items()
+                    }
+
+        quantized_embeddings_raw = telemetry.get("quantized_embeddings", {})
+        quantized_embeddings: Dict[str, List[Dict[str, Any]]] = {}
+        if isinstance(quantized_embeddings_raw, Mapping):
+            for field, entries in quantized_embeddings_raw.items():
+                normalised_entries: List[Dict[str, Any]] = []
+                for entry in _iterable_to_list(entries):
+                    if not isinstance(entry, Mapping):
+                        continue
+                    values_raw = entry.get("values", [])
+                    if isinstance(values_raw, Mapping):
+                        values_iterable = list(values_raw.values())
+                    elif isinstance(values_raw, (list, tuple, set)):
+                        values_iterable = list(values_raw)
+                    else:
+                        values_iterable = [values_raw]
+                    values = [_coerce_int(val) for val in values_iterable]
+                    scale = _coerce_float(entry.get("scale", 1.0))
+                    if scale == 0.0:
+                        scale = 1.0
+                    normalised_entries.append(
+                        {
+                            "index": _coerce_int(entry.get("index", len(normalised_entries))),
+                            "values": values,
+                            "scale": scale,
+                        }
+                    )
+                quantized_embeddings[str(field)] = normalised_entries
+
         telemetry_obj = CompressionTelemetry(
             selected_indices=selected_indices,
             selected_scores=selected_scores,
@@ -165,6 +218,8 @@ class CompressionRecord:
             field_budgets=field_budgets,
             allocation_weights=allocation_weights,
             dropped_indices=dropped_indices,
+            residual_statistics=residual_statistics,
+            quantized_embeddings=quantized_embeddings,
         )
 
         return CompressionResult(
@@ -221,6 +276,8 @@ class CompressionRecord:
             "field_budgets": getattr(telemetry, "field_budgets", {}),
             "allocation_weights": getattr(telemetry, "allocation_weights", {}),
             "dropped_indices": getattr(telemetry, "dropped_indices", {}),
+            "residual_statistics": getattr(telemetry, "residual_statistics", {}),
+            "quantized_embeddings": getattr(telemetry, "quantized_embeddings", {}),
         }
 
         return cls(
@@ -318,7 +375,13 @@ class Orchestrator:
             metadata.setdefault("compression", compression_metadata)
             summary = compression_metadata.get("summary", {})
             if isinstance(summary, Mapping):
-                for field in ("compression_ratio", "tokens_retained", "tokens_total"):
+                for field in (
+                    "compression_ratio",
+                    "tokens_retained",
+                    "tokens_total",
+                    "tokens_regenerated",
+                    "tokens_dropped",
+                ):
                     value = summary.get(field)
                     if value is not None and field not in metadata:
                         metadata[field] = value
@@ -397,8 +460,13 @@ class Orchestrator:
         sample = keys[-sample_size:]
 
         qualities: List[float] = []
+        retained_ratios: List[float] = []
+        regenerated_ratios: List[float] = []
+        mse_values: List[float] = []
+        kl_values: List[float] = []
         issues: List[Dict[str, Any]] = []
         probe_entries: List[str] = []
+        reconstruction_details: List[Dict[str, Any]] = []
 
         for key in sample:
             try:
@@ -420,27 +488,61 @@ class Orchestrator:
             bottleneck = IBottleneck(target_budget=budget)
             reconstructed = bottleneck.decompress(compression_result)
 
-            summary = record.summary()
-            total_tokens = summary.get("tokens_total", 0.0) or 0.0
-            retained = sum(len(values) for values in reconstructed.values())
-            quality = float(retained) / float(total_tokens) if total_tokens else 0.0
+            metrics = reconstructed.get("metrics", {}) if isinstance(reconstructed, Mapping) else {}
+            retained_ratio = float(metrics.get("retained_ratio", 0.0) or 0.0)
+            regenerated_ratio = float(metrics.get("regenerated_ratio", 0.0) or 0.0)
+            mean_mse = float(metrics.get("mean_mse", 0.0) or 0.0)
+            mean_kl = float(metrics.get("mean_kl_divergence", 0.0) or 0.0)
+
+            retained_ratios.append(retained_ratio)
+            regenerated_ratios.append(regenerated_ratio)
+            mse_values.append(mean_mse)
+            kl_values.append(mean_kl)
+
+            quality = max(0.0, min(1.0, retained_ratio * (1.0 - min(mean_mse, 1.0))))
             qualities.append(quality)
             probe_entries.append(key)
 
+            summary = record.summary()
+            reconstruction_details.append(
+                {
+                    "key": key,
+                    "retained_ratio": retained_ratio,
+                    "regenerated_ratio": regenerated_ratio,
+                    "mean_mse": mean_mse,
+                    "mean_kl_divergence": mean_kl,
+                    "quality": quality,
+                    "tokens_total": summary.get("tokens_total", 0.0),
+                }
+            )
+
         reconstruction_summary: Dict[str, Any]
         if qualities:
+            def _mean(values: Sequence[float]) -> float:
+                return float(sum(values) / len(values)) if values else 0.0
+
             reconstruction_summary = {
-                "mean_quality": float(sum(qualities) / len(qualities)),
+                "mean_quality": _mean(qualities),
                 "min_quality": float(min(qualities)),
                 "max_quality": float(max(qualities)),
+                "mean_retained_ratio": _mean(retained_ratios),
+                "mean_regenerated_ratio": _mean(regenerated_ratios),
+                "mean_mse": _mean(mse_values),
+                "mean_kl_divergence": _mean(kl_values),
                 "sample_size": len(qualities),
+                "details": reconstruction_details,
             }
         else:
             reconstruction_summary = {
                 "mean_quality": 0.0,
                 "min_quality": 0.0,
                 "max_quality": 0.0,
+                "mean_retained_ratio": 0.0,
+                "mean_regenerated_ratio": 0.0,
+                "mean_mse": 0.0,
+                "mean_kl_divergence": 0.0,
                 "sample_size": 0,
+                "details": [],
             }
 
         return {

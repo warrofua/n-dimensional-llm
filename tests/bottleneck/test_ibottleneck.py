@@ -46,7 +46,11 @@ def test_topk_selection_respects_budget_and_telemetry():
     assert result.telemetry.dropped_indices["text"] == [0]
 
     reconstructed = bottleneck.decompress(result)
-    assert reconstructed == result.compressed_fields
+    assert reconstructed["kept"] == result.compressed_fields
+    assert set(reconstructed["regenerated"]) == {"text", "layout"}
+    assert len(reconstructed["regenerated"]["text"]) == 1
+    assert reconstructed["metrics"]["retained_ratio"] == pytest.approx(3 / 5)
+    assert reconstructed["metrics"]["fields"]["text"]["mse"] >= 0.0
 
 
 def test_query_conditioned_scoring_prefers_query_aligned_tokens():
