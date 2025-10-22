@@ -1,6 +1,12 @@
 import pytest
+import torch
 
-from nd_llm.bottleneck import IBottleneck, QueryDotProductScoringStrategy
+from nd_llm.bottleneck import (
+    IBottleneck,
+    LearnableTokenScorer,
+    QueryDotProductScoringStrategy,
+    configure_scorer,
+)
 from nd_llm.encoders import Encoder, LayoutEncoder, TextEncoder
 from nd_llm.registry import Registry
 
@@ -95,6 +101,55 @@ def test_metrics_report_information_proxies():
     assert metrics["rd_proxy"] == pytest.approx(0.5)
     assert metrics["embedding_reconstruction_error"] == pytest.approx(2.0)
     assert result.telemetry.dropped_indices["text"] == [0]
+    assert result.loss_terms == {}
+
+
+def test_scorer_configuration_allows_strategy_swapping():
+    fields = {"text": ["zero", "one", "two"]}
+    encoders = {"text": MockEncoder([[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]])}
+
+    norm_fn, norm_module = configure_scorer("norm")
+    assert callable(norm_fn)
+    assert norm_module is None
+
+    default_bottleneck = IBottleneck(target_budget=1)
+    default_result = default_bottleneck.compress(fields, encoders)
+
+    norm_bottleneck = IBottleneck(target_budget=1, scorer_config="norm")
+    norm_result = norm_bottleneck.compress(fields, encoders)
+
+    assert norm_result.telemetry.selected_indices == default_result.telemetry.selected_indices
+    assert norm_result.loss_terms == {}
+
+    learn_config = {
+        "type": "learnable",
+        "embedding_dim": 2,
+        "hidden_dims": (4,),
+        "context_dim": 2,
+    }
+    learn_bottleneck = IBottleneck(target_budget=1, scorer_config=learn_config)
+    assert isinstance(learn_bottleneck.learnable_scorer, LearnableTokenScorer)
+    learn_result = learn_bottleneck.compress(fields, encoders, context={"query_embedding": [1.0, 0.0]})
+    assert set(learn_result.loss_terms.keys()) >= {"ib_proxy", "rd_proxy"}
+    _, helper_module = configure_scorer({**learn_config, "type": "learnable"})
+    assert isinstance(helper_module, LearnableTokenScorer)
+
+
+def test_learnable_scorer_yields_trainable_loss_terms():
+    torch.manual_seed(0)
+    fields = {"text": ["a", "b", "c"]}
+    encoders = {"text": MockEncoder([[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]])}
+    scorer = LearnableTokenScorer(embedding_dim=2, context_dim=2, hidden_dims=(8,))
+    bottleneck = IBottleneck(target_budget=2, learnable_scorer=scorer)
+
+    result = bottleneck.compress(fields, encoders, context={"query_embedding": [0.6, 0.4]})
+
+    assert "ib_proxy" in result.loss_terms
+    assert "rd_proxy" in result.loss_terms
+    combined_loss = result.loss_terms["rd_proxy"] - result.loss_terms["ib_proxy"]
+    combined_loss.backward()
+    grads = [param.grad for param in scorer.parameters() if param.requires_grad]
+    assert any(grad is not None for grad in grads)
 
 
 def test_encoder_protocol_and_registry_compatibility():
