@@ -142,6 +142,36 @@ class STM:
         with self._lock:
             return list(self._index.keys())
 
+    def get_index_entry(self, key: str) -> Dict[str, Any]:
+        with self._lock:
+            entry = self._index.get(key)
+            if entry is None:
+                raise KeyError(f"Key '{key}' not found in STM index")
+            return json.loads(json.dumps(entry))
+
+    def query(
+        self,
+        *,
+        metadata_filter: Optional[Mapping[str, Any]] = None,
+        limit: Optional[int] = None,
+    ) -> list[tuple[str, Dict[str, Any]]]:
+        with self._lock:
+            items = list(self._index.items())
+
+        results: list[tuple[str, Dict[str, Any]]] = []
+        for key, entry in items:
+            metadata = entry.get("metadata", {})
+            if metadata_filter and not self._metadata_matches(metadata, metadata_filter):
+                continue
+            results.append((key, json.loads(json.dumps(entry))))
+            if limit is not None and len(results) >= limit:
+                break
+        return results
+
+    def list_by_alignment(self, alignment_key: str, limit: Optional[int] = None) -> Sequence[str]:
+        matches = self.query(metadata_filter={"alignment_key": alignment_key}, limit=limit)
+        return [key for key, _ in matches]
+
     def __contains__(self, key: str) -> bool:
         with self._lock:
             return key in self._index
@@ -161,7 +191,7 @@ class STM:
         metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
         tensor_filename = self._tensor_filename(key)
-        return {
+        entry = {
             "tensor_file": tensor_filename,
             "shape": list(shape),
             "dtype": "float64",
@@ -170,6 +200,8 @@ class STM:
             "compression": "zlib",
             "metadata": metadata,
         }
+        entry.update(self._derive_index_annotations(metadata))
+        return entry
 
     def _tensor_filename(self, key: str) -> str:
         safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
@@ -234,6 +266,62 @@ class STM:
             metadata_dict = dict(metadata)
         json.dumps(metadata_dict)
         return metadata_dict
+
+    def _metadata_matches(
+        self,
+        metadata: Mapping[str, Any],
+        metadata_filter: Mapping[str, Any],
+    ) -> bool:
+        for dotted_key, expected in metadata_filter.items():
+            value: Any = metadata
+            for part in str(dotted_key).split("."):
+                if isinstance(value, Mapping) and part in value:
+                    value = value[part]
+                else:
+                    value = None
+                    break
+
+            if isinstance(expected, (list, tuple, set, frozenset)):
+                if value not in expected:
+                    return False
+            elif expected is None:
+                if value is not None:
+                    return False
+            else:
+                if value != expected:
+                    return False
+        return True
+
+    def _derive_index_annotations(self, metadata: Mapping[str, Any]) -> Dict[str, Any]:
+        annotations: Dict[str, Any] = {}
+        compression_data = metadata.get("compression") if isinstance(metadata, Mapping) else None
+        if isinstance(compression_data, Mapping):
+            summary = compression_data.get("summary")
+            if isinstance(summary, Mapping):
+                compression_summary = {}
+                ratio = summary.get("compression_ratio")
+                if isinstance(ratio, (int, float)):
+                    compression_summary["compression_ratio"] = float(ratio)
+                retained = summary.get("tokens_retained")
+                if isinstance(retained, (int, float)):
+                    compression_summary["tokens_retained"] = float(retained)
+                total = summary.get("tokens_total")
+                if isinstance(total, (int, float)):
+                    compression_summary["tokens_total"] = float(total)
+                if compression_summary:
+                    annotations["compression_summary"] = compression_summary
+
+            telemetry = compression_data.get("telemetry")
+            if isinstance(telemetry, Mapping):
+                budget = telemetry.get("budget")
+                if isinstance(budget, (int, float)):
+                    annotations["compression_budget"] = float(budget)
+
+        alignment_key = metadata.get("alignment_key") if isinstance(metadata, Mapping) else None
+        if isinstance(alignment_key, str):
+            annotations["alignment_key"] = alignment_key
+
+        return annotations
 
     def _load_index(self) -> Dict[str, MutableMapping[str, Any]]:
         if not self._index_path.exists():
