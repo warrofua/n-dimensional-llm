@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from collections.abc import Sequence as SequenceABC
@@ -23,6 +24,11 @@ from nd_llm.utils.config import OrchestratorConfig
 def _to_serialisable(value: Any) -> Any:
     """Convert values to JSON-serialisable structures."""
 
+    if hasattr(value, "tolist"):
+        try:
+            return _to_serialisable(value.tolist())
+        except TypeError:
+            pass
     if isinstance(value, Mapping):
         return {str(k): _to_serialisable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
@@ -64,6 +70,23 @@ def _coerce_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _compute_layout_signature(idx_cells: Mapping[str, Any]) -> Optional[str]:
+    canonical = idx_cells.get("canonical") if isinstance(idx_cells, Mapping) else None
+    if not isinstance(canonical, Mapping):
+        return None
+    parts: List[str] = []
+    for field in sorted(canonical):
+        values = _iterable_to_list(canonical[field])
+        if not values:
+            continue
+        part = f"{field}:{','.join(str(value) for value in values)}"
+        parts.append(part)
+    if not parts:
+        return None
+    payload = "|".join(parts)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -118,24 +141,280 @@ class CompressionRecord:
         return summary
 
     def as_metadata(self) -> Dict[str, Any]:
+        serialised_fields: Dict[str, List[Any]] = {
+            str(field): [
+                _to_serialisable(item)
+                for item in _iterable_to_list(sequence)
+            ]
+            for field, sequence in self.compressed_fields.items()
+        }
+        telemetry_map = self.telemetry if isinstance(self.telemetry, Mapping) else {}
+        metrics_map = {
+            str(name): float(value)
+            for name, value in self.metrics.items()
+        }
+        summary = self.summary()
+
+        field_counts = {
+            field: len(entries)
+            for field, entries in serialised_fields.items()
+        }
+        pipeline: Dict[str, Any] = {}
+        if self.bottleneck is not None:
+            pipeline["bottleneck"] = str(self.bottleneck)
+
+        idx_cells = self._build_idx_cells(telemetry_map, serialised_fields)
+        artifacts = self._collect_artifacts(telemetry_map, serialised_fields)
+
         metadata: Dict[str, Any] = {
-            "compressed_fields": {
-                str(field): [
-                    _to_serialisable(item)
-                    for item in _iterable_to_list(sequence)
-                ]
-                for field, sequence in self.compressed_fields.items()
-            },
+            "compressed_fields": serialised_fields,
             "telemetry": _to_serialisable(self.telemetry),
-            "metrics": {
-                str(name): float(value)
-                for name, value in self.metrics.items()
+            "metrics": metrics_map,
+            "summary": summary,
+            "pipeline": pipeline,
+            "fields": {
+                "names": sorted(serialised_fields.keys()),
+                "counts": field_counts,
             },
-            "summary": self.summary(),
+            "K": int(float(summary.get("tokens_retained", 0.0) or 0.0)),
+            "mi_lb": self._resolve_mi_lower_bound(),
+            "idx_cells": idx_cells,
+            "artifacts": artifacts,
         }
         if self.bottleneck is not None:
             metadata["bottleneck"] = str(self.bottleneck)
         return metadata
+
+    def _resolve_mi_lower_bound(self) -> Optional[float]:
+        for source in (self.metrics, self.telemetry):
+            if not isinstance(source, Mapping):
+                continue
+            for key in ("mi_lb", "mi_lower_bound", "mutual_information_lb"):
+                value = source.get(key)
+                if value is None:
+                    continue
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    def _build_idx_cells(
+        self,
+        telemetry: Mapping[str, Any],
+        fields: Mapping[str, Sequence[Any]],
+    ) -> Dict[str, Any]:
+        idx_cells: Dict[str, Any] = {}
+
+        kept = self._normalise_index_map(telemetry.get("selected_indices"))
+        if kept:
+            idx_cells["kept"] = kept
+
+        dropped = self._normalise_index_map(telemetry.get("dropped_indices"))
+        if dropped:
+            idx_cells["dropped"] = dropped
+
+        token_counts_raw = telemetry.get("token_counts")
+        if isinstance(token_counts_raw, Mapping):
+            token_counts = {}
+            for field, value in token_counts_raw.items():
+                try:
+                    token_counts[str(field)] = int(value)
+                except (TypeError, ValueError):
+                    continue
+            if token_counts:
+                idx_cells["counts"] = token_counts
+
+        canonical_ids = self._extract_canonical_cell_ids(fields)
+        if canonical_ids:
+            idx_cells["canonical"] = canonical_ids
+
+        return idx_cells
+
+    def _normalise_index_map(self, value: Any) -> Dict[str, List[int]]:
+        if not isinstance(value, Mapping):
+            return {}
+        normalised: Dict[str, List[int]] = {}
+        for field, indices in value.items():
+            normalised_indices: List[int] = []
+            for raw in _iterable_to_list(indices):
+                try:
+                    normalised_indices.append(int(raw))
+                except (TypeError, ValueError):
+                    continue
+            if normalised_indices:
+                normalised[str(field)] = normalised_indices
+        return normalised
+
+    def _extract_canonical_cell_ids(
+        self,
+        fields: Mapping[str, Sequence[Any]],
+    ) -> Dict[str, List[str]]:
+        canonical: Dict[str, List[str]] = {}
+        for field, entries in fields.items():
+            ids: List[str] = []
+            for entry in entries:
+                identifier = self._resolve_canonical_identifier(entry)
+                if identifier is not None:
+                    ids.append(str(identifier))
+            if ids:
+                canonical[str(field)] = ids
+        return canonical
+
+    def _resolve_canonical_identifier(self, entry: Any) -> Optional[Any]:
+        if isinstance(entry, Mapping):
+            for key in (
+                "canonical_cell_id",
+                "canonical_id",
+                "cell_id",
+                "cell_index",
+                "canonical_cell",
+                "cell",
+                "id",
+            ):
+                if key not in entry:
+                    continue
+                value = entry[key]
+                if isinstance(value, Mapping):
+                    for nested_key in ("id", "cell_id", "index"):
+                        if nested_key in value:
+                            return value[nested_key]
+                    continue
+                if value is not None:
+                    return value
+            for nested in entry.values():
+                identifier = self._resolve_canonical_identifier(nested)
+                if identifier is not None:
+                    return identifier
+        if isinstance(entry, (list, tuple)):
+            for item in entry:
+                identifier = self._resolve_canonical_identifier(item)
+                if identifier is not None:
+                    return identifier
+        return None
+
+    def _collect_artifacts(
+        self,
+        telemetry: Mapping[str, Any],
+        fields: Mapping[str, Sequence[Any]],
+    ) -> Dict[str, Any]:
+        artifacts: Dict[str, Any] = {}
+        for key in ("artifacts", "cell_artifacts", "rasterized_cells", "canonical_cells"):
+            value = telemetry.get(key)
+            if value is not None:
+                artifacts[str(key)] = _to_serialisable(value)
+
+        aggregated = self._aggregate_canonical_cells(telemetry, fields)
+        if aggregated is not None and "canonical_cells" not in artifacts:
+            artifacts["canonical_cells"] = aggregated
+
+        return artifacts
+
+    def _aggregate_canonical_cells(
+        self,
+        telemetry: Mapping[str, Any],
+        fields: Mapping[str, Sequence[Any]],
+    ) -> Optional[Any]:
+        cell_centers = self._prepare_cell_centers(
+            telemetry.get("cell_centers")
+            or telemetry.get("canonical_cell_centers")
+            or self._extract_artifact_centers(telemetry.get("artifacts"))
+        )
+        if not cell_centers:
+            return None
+
+        field_batches: List[Dict[str, Any]] = []
+        for entries in fields.values():
+            tokens_batch: List[List[float]] = []
+            coords_batch: List[List[float]] = []
+            for entry in entries:
+                if not isinstance(entry, Mapping):
+                    continue
+                embedding = self._extract_embedding(entry)
+                coords = self._extract_coordinates(entry)
+                if embedding is None or coords is None:
+                    continue
+                tokens_batch.append(embedding)
+                coords_batch.append(coords)
+            if tokens_batch and len(tokens_batch) == len(coords_batch):
+                field_batches.append({
+                    "tokens": [tokens_batch],
+                    "coords": [coords_batch],
+                })
+
+        if not field_batches:
+            return None
+
+        agg_mode = telemetry.get("cell_agg", "mean")
+        tau = telemetry.get("cell_tau")
+        backend = telemetry.get("cell_backend")
+        try:
+            from nd_llm.utils import aggregate_fields
+        except Exception:  # pragma: no cover - optional dependency failures
+            return None
+
+        kwargs: Dict[str, Any] = {}
+        if isinstance(agg_mode, str):
+            kwargs["agg"] = agg_mode
+        if isinstance(tau, (int, float)):
+            kwargs["tau"] = float(tau)
+        if isinstance(backend, str):
+            kwargs["backend"] = backend
+
+        try:
+            aggregated = aggregate_fields(field_batches, cell_centers, **kwargs)
+        except Exception:  # pragma: no cover - aggregation is best-effort
+            return None
+        return _to_serialisable(aggregated)
+
+    def _extract_artifact_centers(self, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            for key in ("cell_centers", "centers", "canonical_centers"):
+                if key in value:
+                    return value[key]
+        return None
+
+    def _extract_embedding(self, entry: Mapping[str, Any]) -> Optional[List[float]]:
+        for key in ("embedding", "vector", "tokens", "values"):
+            if key in entry:
+                vector = _iterable_to_list(entry[key])
+                if vector:
+                    try:
+                        return [float(component) for component in vector]
+                    except (TypeError, ValueError):
+                        continue
+        return None
+
+    def _extract_coordinates(self, entry: Mapping[str, Any]) -> Optional[List[float]]:
+        for key in ("coords", "coord", "position", "center", "centroid"):
+            if key in entry:
+                vector = _iterable_to_list(entry[key])
+                if vector:
+                    try:
+                        return [float(component) for component in vector]
+                    except (TypeError, ValueError):
+                        continue
+        return None
+
+    def _prepare_cell_centers(self, value: Any) -> List[Any]:
+        centres = _iterable_to_list(value)
+        if not centres:
+            return []
+        if centres and isinstance(centres[0], (int, float)):
+            return [[[_coerce_float(component) for component in centres]]]
+        if centres and isinstance(centres[0], list):
+            if centres[0] and isinstance(centres[0][0], (int, float)):
+                return [[[_coerce_float(component) for component in centre] for centre in centres]]
+            normalised: List[Any] = []
+            for batch in centres:
+                batch_list = _iterable_to_list(batch)
+                normalised.append([
+                    [_coerce_float(component) for component in centre]
+                    for centre in batch_list
+                    if isinstance(centre, (list, tuple))
+                ])
+            return normalised
+        return []
 
     def to_compression_result(self) -> CompressionResult:
         telemetry = self.telemetry if isinstance(self.telemetry, Mapping) else {}
@@ -379,8 +658,15 @@ class Orchestrator:
 
         if event.compression is not None:
             compression_metadata = event.compression.as_metadata()
-            metadata.setdefault("compression", compression_metadata)
-            summary = compression_metadata.get("summary", {})
+            existing_compression = metadata.get("compression")
+            if isinstance(existing_compression, Mapping):
+                merged_compression = dict(existing_compression)
+                merged_compression.update(compression_metadata)
+            else:
+                merged_compression = compression_metadata
+            metadata["compression"] = merged_compression
+
+            summary = merged_compression.get("summary", {})
             if isinstance(summary, Mapping):
                 for field in (
                     "compression_ratio",
@@ -392,9 +678,36 @@ class Orchestrator:
                     value = summary.get(field)
                     if value is not None and field not in metadata:
                         metadata[field] = value
-            telemetry = compression_metadata.get("telemetry", {})
+            telemetry = merged_compression.get("telemetry", {})
             if isinstance(telemetry, Mapping) and "budget" in telemetry and "compression_budget" not in metadata:
                 metadata["compression_budget"] = telemetry["budget"]
+
+            idx_cells = merged_compression.get("idx_cells", {})
+            if isinstance(idx_cells, Mapping) and "idx_cells" not in metadata:
+                metadata["idx_cells"] = idx_cells
+
+            compression_artifacts = merged_compression.get("artifacts")
+            if isinstance(compression_artifacts, Mapping):
+                existing_artifacts = metadata.get("artifacts")
+                merged_artifacts = dict(compression_artifacts)
+                if isinstance(existing_artifacts, Mapping):
+                    merged_artifacts.update(existing_artifacts)
+                metadata["artifacts"] = merged_artifacts
+
+            if "K" not in metadata and merged_compression.get("K") is not None:
+                metadata["K"] = merged_compression["K"]
+
+            mi_lb = merged_compression.get("mi_lb")
+            if mi_lb is not None and "mi_lb" not in metadata:
+                metadata["mi_lb"] = mi_lb
+
+            layout_signature = _compute_layout_signature(idx_cells)
+            if layout_signature and "layout_signature" not in metadata:
+                metadata["layout_signature"] = layout_signature
+            if layout_signature and "layout_signature" not in merged_compression:
+                merged_compression["layout_signature"] = layout_signature
+
+        metadata.setdefault("task", metadata.get("policy_name", self._config.policy_name))
 
         attempt_key = base_key
         duplicate_attempts = 0

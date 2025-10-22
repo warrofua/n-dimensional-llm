@@ -31,8 +31,43 @@ def _make_record(total_tokens: int, kept_tokens: int, budget: int, field: str = 
         "selected_scores": {field: [1.0] * kept_tokens},
         "token_counts": {field: total_tokens},
         "budget": budget,
+        "dropped_indices": {field: list(range(kept_tokens, total_tokens))},
     }
     metrics = {"information_bound": kept_tokens / total_tokens if total_tokens else 0.0}
+    return CompressionRecord(
+        compressed_fields=compressed_fields,
+        telemetry=telemetry,
+        metrics=metrics,
+        bottleneck="ib-topk",
+    )
+
+
+def _make_canonical_record() -> CompressionRecord:
+    compressed_fields = {
+        "layout": [
+            {
+                "token": "alpha",
+                "canonical_cell_id": "r0c0",
+                "embedding": [1.0, 0.0],
+                "coords": [0.0, 0.0],
+            },
+            {
+                "token": "beta",
+                "canonical_cell_id": "r0c1",
+                "embedding": [0.5, 0.5],
+                "coords": [0.0, 1.0],
+            },
+        ]
+    }
+    telemetry = {
+        "selected_indices": {"layout": [0, 1]},
+        "selected_scores": {"layout": [0.7, 0.6]},
+        "token_counts": {"layout": 3},
+        "budget": 2,
+        "dropped_indices": {"layout": [2]},
+        "cell_centers": [[[0.0, 0.0], [0.0, 1.0], [1.0, 0.5]]],
+    }
+    metrics = {"mi_lb": 0.25}
     return CompressionRecord(
         compressed_fields=compressed_fields,
         telemetry=telemetry,
@@ -101,6 +136,39 @@ def test_orchestrator_generates_unique_keys(tmp_path) -> None:
     tensor_two, _ = stm.retrieve(key_two)
     assert _as_list(tensor_one) == pytest.approx(tensor_values)
     assert _as_list(tensor_two) == pytest.approx(tensor_values)
+
+
+def test_orchestrator_enriches_layout_metadata(tmp_path) -> None:
+    storage_config = STMConfig(storage_dir=tmp_path)
+    stm = STM(storage_config)
+    orchestrator = Orchestrator(
+        stm=stm,
+        config=OrchestratorConfig(target_budget=2.0, policy_name="layout", budget_step=0.5),
+    )
+
+    record = _make_canonical_record()
+    key = orchestrator.log_usage_event(
+        UsageEvent(
+            key="layout-1",
+            tensor=[1.0, 0.0],
+            metadata={"input_tokens": 5},
+            compression=record,
+        )
+    )
+
+    _, stored_metadata = stm.retrieve(key)
+    baseline_metadata = record.as_metadata()
+    assert stored_metadata["task"] == "layout"
+    assert stored_metadata["K"] == baseline_metadata["K"]
+    assert stored_metadata["mi_lb"] == pytest.approx(baseline_metadata["mi_lb"])
+    assert "idx_cells" in stored_metadata
+    assert "layout_signature" in stored_metadata
+    assert "canonical_cells" in stored_metadata.get("compression", {}).get("artifacts", {})
+    assert "canonical_cells" in stored_metadata.get("artifacts", {})
+
+    layout_signature = stored_metadata.get("layout_signature")
+    if layout_signature:
+        assert stm.list_by_layout(layout_signature) == [key]
 
 
 def test_budget_tuning_updates_target_budget(tmp_path) -> None:
