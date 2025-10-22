@@ -48,6 +48,13 @@ A control loop that probes what the model remembers, tunes bottleneck budgets, r
 * Budget scheduling (tighten/loosen by task, user, or SLA).
 * “Pay with bits only when it pays with accuracy.”
 
+#### Operating the Auto‑IB Orchestrator
+
+* Wrap each STM append in a :class:`UsageEvent` that can carry the compressed tensor **and** a :class:`CompressionRecord`. Telemetry such as selected indices, token counts, and IB metrics are captured under ``metadata["compression"]`` and mirrored in the STM index.
+* Call :func:`Orchestrator.tune_budget` periodically (e.g., after processing a batch). The default :class:`CompressionRatioBudgetStrategy` looks at the recent compression ratios and adjusts ``Orchestrator.config.target_budget`` upward when quality drops or downward when utilisation saturates. Inspect ``Orchestrator.budget_history`` to audit the decisions.
+* Trigger :func:`Orchestrator.run_retention_probe` on a schedule to sample STM entries, reconstruct them with the stored :class:`~nd_llm.bottleneck.ib.IBottleneck` telemetry, and monitor reconstruction quality / drift. Any missing or malformed telemetry is surfaced under ``probe["issues"]``.
+* Use the new STM query helpers such as :func:`STM.query` or :func:`STM.list_by_alignment` to fetch aligned batches of entries (e.g., all shards for a ``session_id``) without loading every payload.
+
 ---
 
 ## Architecture (high level)
