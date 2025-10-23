@@ -115,13 +115,17 @@ def run_benchmark(
 
     runs: List[BudgetRun] = []
     predict_fn = _invoice_prediction_factory(threshold)
+
+    def _label_fn(invoice: Mapping[str, Any], threshold_value: float = threshold) -> Any:
+        return high_value_label(invoice, threshold_value)
+
     for budget in budget_values:
         budget_run = _evaluate_budget(
             budget=int(budget),
             dataset=dataset,
             registry_encoders=registry.encoders,
             fields_fn=invoice_fields,
-            label_fn=lambda invoice, thr=threshold: high_value_label(invoice, thr),
+            label_fn=_label_fn,
             predict_fn=predict_fn,
             metadata_fn=_invoice_metadata,
             policy_name="synthetic-doc-benchmark",
@@ -511,7 +515,9 @@ def _drop_field_ablation(field: str) -> AblationFn:
         __: int,
         ___: int,
     ) -> Mapping[str, List[MutableMapping[str, Any]]]:
-        mutated = {name: list(entries) for name, entries in fields.items()}
+        mutated: Dict[str, List[MutableMapping[str, Any]]] = {
+            str(name): list(entries) for name, entries in fields.items()
+        }
         mutated[field] = []
         return mutated
 
@@ -530,11 +536,17 @@ def _noise_field_ablation(
         doc_index: int,
         seed: int,
     ) -> Mapping[str, List[MutableMapping[str, Any]]]:
-        mutated = {name: [dict(entry) for entry in entries] for name, entries in fields.items()}
+        mutated: Dict[str, List[MutableMapping[str, Any]]] = {
+            str(name): [dict(entry) for entry in entries]
+            for name, entries in fields.items()
+        }
         rng = random.Random(seed * 97 + doc_index * 13 + hash(field))
         updated: List[MutableMapping[str, Any]] = []
         for entry in mutated.get(field, []):
             value = entry.get(value_key)
+            if value is None:
+                updated.append(entry)
+                continue
             try:
                 base = float(value)
             except (TypeError, ValueError):
@@ -556,7 +568,10 @@ def _perturb_layout_ablation(*, scale: float, field: str = "layout") -> Ablation
         doc_index: int,
         seed: int,
     ) -> Mapping[str, List[MutableMapping[str, Any]]]:
-        mutated = {name: [dict(entry) for entry in entries] for name, entries in fields.items()}
+        mutated: Dict[str, List[MutableMapping[str, Any]]] = {
+            str(name): [dict(entry) for entry in entries]
+            for name, entries in fields.items()
+        }
         rng = random.Random(seed * 137 + doc_index * 19)
         perturbed: List[MutableMapping[str, Any]] = []
         for entry in mutated.get(field, []):
@@ -582,7 +597,10 @@ def _shuffle_field_ablation(field: str) -> AblationFn:
         doc_index: int,
         seed: int,
     ) -> Mapping[str, List[MutableMapping[str, Any]]]:
-        mutated = {name: [dict(entry) for entry in entries] for name, entries in fields.items()}
+        mutated: Dict[str, List[MutableMapping[str, Any]]] = {
+            str(name): [dict(entry) for entry in entries]
+            for name, entries in fields.items()
+        }
         rng = random.Random(seed * 59 + doc_index * 17 + hash(field))
         entries = mutated.get(field, [])
         rng.shuffle(entries)
@@ -767,11 +785,11 @@ def _resolve_field_coordinates(
         if isinstance(entry, Mapping):
             token_ids = entry.get("token_ids")
             if isinstance(token_ids, Sequence) and token_ids:
-                collected = [
-                    token_map.get(_identifier_key(token_id))
-                    for token_id in token_ids
-                    if token_map.get(_identifier_key(token_id)) is not None
-                ]
+                collected: List[Sequence[float]] = []
+                for token_id in token_ids:
+                    resolved = token_map.get(_identifier_key(token_id))
+                    if resolved is not None:
+                        collected.append(resolved)
                 if collected:
                     centre = _mean_coords(collected)
             if centre is None:

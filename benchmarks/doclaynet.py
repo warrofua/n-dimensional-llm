@@ -1,22 +1,120 @@
-"""Utilities for loading and normalising the DocLayNet dataset."""
+"""Typed helpers for working with the DocLayNet document-layout dataset."""
 
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from nd_llm.encoders import Encoder, LayoutEncoder, TextEncoder
 from nd_llm.registry import Registry
 
-_SAMPLE_PATH = Path(__file__).with_name("data").joinpath("doclaynet_sample.jsonl")
+__all__ = [
+    "load_doclaynet_dataset",
+    "build_doclaynet_registry",
+    "build_doclaynet_encoders",
+    "doclaynet_fields",
+]
 
-_DOCLAYNET_SPLITS: Dict[str, List[str]] = {
-    "train": ["train", "training"],
-    "training": ["train", "training"],
-    "test": ["test", "testing"],
-    "validation": ["validation", "valid", "val", "dev"],
-    "val": ["validation", "valid", "val", "dev"],
+
+# A tiny in-memory sample used when the real dataset is unavailable.  The sample
+# mirrors the minimal structure the conversion helpers expect, keeping runtime
+# behaviour deterministic for doctests and local experiments.
+_SAMPLE_DOCUMENT: Dict[str, Any] = {
+    "doc_id": "doclaynet-sample",
+    "page_id": "doclaynet-sample-0",
+    "width": 1000,
+    "height": 1400,
+    "segments": [
+        {
+            "segment_id": 0,
+            "label": "header",
+            "confidence": 0.92,
+            "polygon": [10, 10, 400, 10, 400, 120, 10, 120],
+            "text": "DocLayNet Sample Heading",
+            "tokens": [
+                {
+                    "token_id": 0,
+                    "text": "DocLayNet",
+                    "polygon": [10, 10, 180, 10, 180, 120, 10, 120],
+                    "confidence": 0.9,
+                },
+                {
+                    "token_id": 1,
+                    "text": "Sample",
+                    "polygon": [180, 10, 300, 10, 300, 120, 180, 120],
+                    "confidence": 0.91,
+                },
+                {
+                    "token_id": 2,
+                    "text": "Heading",
+                    "polygon": [300, 10, 400, 10, 400, 120, 300, 120],
+                    "confidence": 0.93,
+                },
+            ],
+        },
+        {
+            "segment_id": 1,
+            "label": "paragraph",
+            "confidence": 0.88,
+            "polygon": [30, 180, 960, 180, 960, 620, 30, 620],
+            "text": "This is a lightweight fallback paragraph used when the DocLayNet dataset is not installed.",
+            "tokens": [
+                {
+                    "token_id": 0,
+                    "text": "This",
+                    "polygon": [30, 180, 110, 180, 110, 260, 30, 260],
+                    "confidence": 0.87,
+                },
+                {
+                    "token_id": 1,
+                    "text": "is",
+                    "polygon": [120, 180, 150, 180, 150, 260, 120, 260],
+                    "confidence": 0.88,
+                },
+                {
+                    "token_id": 2,
+                    "text": "a",
+                    "polygon": [160, 180, 190, 180, 190, 260, 160, 260],
+                    "confidence": 0.9,
+                },
+                {
+                    "token_id": 3,
+                    "text": "lightweight",
+                    "polygon": [200, 180, 370, 180, 370, 260, 200, 260],
+                    "confidence": 0.9,
+                },
+                {
+                    "token_id": 4,
+                    "text": "fallback",
+                    "polygon": [380, 180, 520, 180, 520, 260, 380, 260],
+                    "confidence": 0.89,
+                },
+                {
+                    "token_id": 5,
+                    "text": "paragraph",
+                    "polygon": [530, 180, 700, 180, 700, 260, 530, 260],
+                    "confidence": 0.9,
+                },
+            ],
+        },
+    ],
+    "metadata": {
+        "source": "synthetic",
+        "split": "sample",
+    },
 }
 
 
@@ -25,34 +123,50 @@ def load_doclaynet_dataset(
     *,
     split: str = "train",
     limit: Optional[int] = None,
-    use_sample: Optional[bool] = None,
+    use_sample: bool = True,
 ) -> List[Dict[str, Any]]:
-    """Load DocLayNet documents from ``root`` or fall back to the bundled sample."""
+    """Load DocLayNet pages from ``root`` or return a bundled sample."""
 
-    documents: List[Dict[str, Any]] = []
-    if use_sample or root is None:
-        documents = list(_load_sample(limit))
-    else:
-        path = Path(root)
-        if not path.exists():
-            raise FileNotFoundError(f"DocLayNet root directory '{path}' does not exist")
-        documents = list(_load_from_directory(path, split=split, limit=limit))
+    if root is None:
+        if not use_sample:
+            raise FileNotFoundError(
+                "DocLayNet root path is required when use_sample is False"
+            )
+        return list(_load_sample(limit))
 
-    if not documents and not use_sample and root is None:
-        documents = list(_load_sample(limit))
-    return documents
+    path = Path(root)
+    if not path.exists():
+        if use_sample:
+            return list(_load_sample(limit))
+        raise FileNotFoundError(f"DocLayNet root directory '{path}' does not exist")
+
+    pages = list(_load_from_directory(path, split=split, limit=limit))
+    if pages:
+        return pages
+
+    if use_sample:
+        return list(_load_sample(limit))
+
+    raise FileNotFoundError(
+        f"DocLayNet split '{split}' not found in '{path}' and no bundled sample is available"
+    )
 
 
 def build_doclaynet_registry() -> Registry:
-    """Return a registry describing DocLayNet token, layout and region fields."""
+    """Return a registry that captures DocLayNet text, layout, and segment metadata."""
 
     registry = Registry()
-    registry.add_field("text", keys=["doc_id", "token_id"], salience=True, modality="text")
-    registry.add_field("layout", keys=["doc_id", "token_id"], modality="layout")
-    registry.add_field("region", keys=["doc_id", "region_id"], modality="entity")
-    registry.add_affinity("text", "layout", keys=["doc_id", "token_id"])
-    registry.add_affinity("region", "text", keys=["doc_id"])
-    registry.add_affinity("region", "layout", keys=["doc_id"])
+    registry.add_field(
+        "text", keys=["doc_id", "page_id", "token_id"], salience=True, modality="text"
+    )
+    registry.add_field(
+        "layout", keys=["doc_id", "page_id", "token_id"], modality="layout"
+    )
+    registry.add_field(
+        "segment", keys=["doc_id", "page_id", "segment_id"], modality="entity"
+    )
+    registry.add_affinity("segment", "text", keys=["doc_id", "page_id", "segment_id"])
+    registry.add_affinity("text", "layout", keys=["doc_id", "page_id", "token_id"])
     registry.validate()
     return registry
 
@@ -60,374 +174,267 @@ def build_doclaynet_registry() -> Registry:
 def build_doclaynet_encoders(
     registry: Registry,
     *,
-    text_dim: int = 8,
-    layout_dim: int = 6,
-    region_dim: int = 4,
+    text_dim: int = 16,
+    layout_dim: int = 8,
+    segment_dim: int = 4,
 ) -> Dict[str, Encoder]:
-    """Register simple encoder stubs for the DocLayNet fields."""
+    """Register simple encoder stubs for the DocLayNet registry."""
 
     encoders: Dict[str, Encoder] = {
         "text": TextEncoder(embedding_dim=text_dim),
         "layout": LayoutEncoder(embedding_dim=layout_dim),
-        "region": TextEncoder(embedding_dim=region_dim),
+        "segment": TextEncoder(embedding_dim=segment_dim),
     }
     for field, encoder in encoders.items():
         registry.register_encoder(field, encoder)
     return encoders
 
 
-def doclaynet_fields(document: Mapping[str, Any]) -> Dict[str, List[MutableMapping[str, Any]]]:
-    """Convert a DocLayNet document into registry-aligned field batches."""
+def doclaynet_fields(
+    document: Mapping[str, Any],
+) -> Dict[str, List[MutableMapping[str, Any]]]:
+    """Convert a DocLayNet page into registry-aligned field payloads."""
 
-    doc_id = str(document.get("doc_id") or document.get("id") or document.get("document_id") or "")
-    width, height = _resolve_size(document)
-    base_page = _resolve_page_index(document)
-    tokens = _extract_tokens(document)
-    regions, token_to_region = _collect_regions(document)
+    doc_id = str(document.get("doc_id") or document.get("document_id") or "")
+    page_id = str(document.get("page_id") or document.get("page") or 0)
+    width = float(document.get("width") or document.get("img_width") or 1.0)
+    height = float(document.get("height") or document.get("img_height") or 1.0)
+    if width <= 0:
+        width = 1.0
+    if height <= 0:
+        height = 1.0
 
     text_field: List[MutableMapping[str, Any]] = []
     layout_field: List[MutableMapping[str, Any]] = []
-    region_field: List[MutableMapping[str, Any]] = []
-    token_text: Dict[int, str] = {}
+    segment_field: List[MutableMapping[str, Any]] = []
 
-    for token_index, raw_token in enumerate(tokens):
-        token_id = _coerce_int(raw_token.get("id") or raw_token.get("token_id") or raw_token.get("idx"))
-        if token_id is None:
-            token_id = token_index
-        token_id = int(token_id)
+    raw_segments = document.get("segments")
+    if not isinstance(raw_segments, Sequence):
+        raw_segments = []
 
-        page_index = _resolve_page_index(raw_token, default=base_page)
-        region_id = _coerce_int(
-            raw_token.get("region_id")
-            or raw_token.get("regionId")
-            or raw_token.get("region")
-            or token_to_region.get(token_id)
+    for index, raw_segment in enumerate(raw_segments):
+        if not isinstance(raw_segment, Mapping):
+            continue
+        segment_id = int(
+            raw_segment.get("segment_id") or raw_segment.get("id") or index
         )
-        if region_id is None:
-            region_id = -1
-        region_id = int(region_id)
-
-        label = _resolve_region_label(regions.get(region_id))
-        text_value = _resolve_token_text(raw_token)
-        token_text[token_id] = text_value
-
-        text_field.append(
-            {
-                "doc_id": doc_id,
-                "token_id": token_id,
-                "text": text_value,
-                "region_id": region_id,
-                "region_label": label,
-                "page_index": page_index,
-            }
+        label = str(
+            raw_segment.get("label") or raw_segment.get("category") or "segment"
+        )
+        confidence_value = raw_segment.get("confidence")
+        confidence = float(confidence_value) if confidence_value is not None else 0.0
+        segment_polygon = _coerce_polygon(
+            raw_segment.get("polygon") or raw_segment.get("bbox")
         )
 
-        bbox = raw_token.get("bbox") or raw_token.get("box") or raw_token.get("xyxy")
-        layout_field.append(
-            {
-                "doc_id": doc_id,
-                "token_id": token_id,
-                "xyxy": _normalise_box(bbox, width, height),
-                "region_id": region_id,
-                "page_index": page_index,
-            }
+        tokens = raw_segment.get("tokens") or raw_segment.get("words")
+        prepared_tokens = _prepare_tokens(
+            tokens, fallback_text=str(raw_segment.get("text", ""))
         )
 
-    for region_id, region in regions.items():
-        token_ids = list({int(token_id) for token_id in region.get("token_ids", [])})
-        label = _resolve_region_label(region)
-        text_value = region.get("text")
-        if not text_value:
-            text_value = " ".join(token_text.get(token_id, "") for token_id in token_ids).strip()
-        page_index = _resolve_page_index(region, default=base_page)
-        bbox = region.get("bbox") or region.get("box") or region.get("xyxy")
-        region_field.append(
+        segment_field.append(
             {
                 "doc_id": doc_id,
-                "region_id": int(region_id),
+                "page_id": page_id,
+                "segment_id": segment_id,
                 "label": label,
-                "token_ids": token_ids,
-                "xyxy": _normalise_box(bbox, width, height),
-                "text": text_value,
-                "page_index": page_index,
+                "confidence": confidence,
+                "polygon": segment_polygon,
             }
         )
 
-    return {"text": text_field, "layout": layout_field, "region": region_field}
+        for token in prepared_tokens:
+            token_id = int(token["token_id"])
+            token_text = str(token["text"])
+            token_confidence = float(token["confidence"])
+            token_polygon = _coerce_polygon(token.get("polygon"))
+            bbox = _polygon_to_bbox(token_polygon)
+            norm_bbox = _normalise_box(bbox, width, height)
+
+            text_field.append(
+                {
+                    "doc_id": doc_id,
+                    "page_id": page_id,
+                    "token_id": token_id,
+                    "text": token_text,
+                    "segment_id": segment_id,
+                    "segment_label": label,
+                    "confidence": token_confidence,
+                }
+            )
+            layout_field.append(
+                {
+                    "doc_id": doc_id,
+                    "page_id": page_id,
+                    "token_id": token_id,
+                    "xyxy": norm_bbox,
+                    "polygon": token_polygon,
+                    "segment_id": segment_id,
+                }
+            )
+
+    return {"text": text_field, "layout": layout_field, "segment": segment_field}
 
 
-def doclaynet_contains_table(document: Mapping[str, Any]) -> bool:
-    """Return ``True`` if the document contains a region labelled as a table."""
+def _prepare_tokens(
+    tokens: Optional[Iterable[Any]],
+    *,
+    fallback_text: str,
+) -> List[Dict[str, Any]]:
+    prepared: List[Dict[str, Any]] = []
+    if tokens is None:
+        tokens = []
 
-    regions, _ = _collect_regions(document)
-    for region in regions.values():
-        label = _resolve_region_label(region)
-        if label.lower() == "table":
-            return True
-    tokens = _extract_tokens(document)
-    for token in tokens:
-        text_value = _resolve_token_text(token)
-        if "table" in text_value.lower():
-            return True
-    return False
+    for index, raw_token in enumerate(tokens):
+        if not isinstance(raw_token, Mapping):
+            continue
+        token_id = int(raw_token.get("token_id") or raw_token.get("id") or index)
+        text = str(raw_token.get("text") or "")
+        if not text and fallback_text:
+            text = fallback_text
+        confidence_value = raw_token.get("confidence")
+        confidence = float(confidence_value) if confidence_value is not None else 0.0
+        polygon = _coerce_polygon(raw_token.get("polygon") or raw_token.get("bbox"))
+        prepared.append(
+            {
+                "token_id": token_id,
+                "text": text,
+                "confidence": confidence,
+                "polygon": polygon,
+            }
+        )
+
+    if not prepared and fallback_text:
+        prepared.append(
+            {
+                "token_id": 0,
+                "text": fallback_text,
+                "confidence": 0.0,
+                "polygon": [],
+            }
+        )
+
+    return prepared
 
 
 def _load_sample(limit: Optional[int]) -> Iterator[Dict[str, Any]]:
     count = 0
-    path = _SAMPLE_PATH
-    if not path.exists():
+    while True:
+        yield deepcopy(_SAMPLE_DOCUMENT)
+        count += 1
+        if limit is not None and count >= limit:
+            break
+        if limit is None:
+            break
+
+
+def _load_from_directory(
+    root: Path, *, split: str, limit: Optional[int]
+) -> Iterator[Dict[str, Any]]:
+    split_path = root / split
+    if not split_path.exists():
         return
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            document = json.loads(line)
-            yield _prepare_document(document, document.get("id"))
-            count += 1
-            if limit is not None and count >= limit:
-                break
 
-
-def _load_from_directory(root: Path, *, split: str, limit: Optional[int]) -> Iterator[Dict[str, Any]]:
-    split_key = split.lower()
-    candidates = _DOCLAYNET_SPLITS.get(split_key, [split_key])
-    visited: set[str] = set()
     count = 0
-    for candidate in candidates:
-        candidate = candidate.strip('/')
-        candidate = candidate.strip('\\')
-        if not candidate:
-            continue
-        if candidate in visited:
-            continue
-        visited.add(candidate)
-        base = root / candidate
-        if base.is_file():
-            for record in _iter_json_records(base):
-                if limit is not None and count >= limit:
-                    return
-                yield _prepare_document(record, base.stem)
-                count += 1
-            if count:
-                return
-        if not base.exists():
-            continue
-        if base.is_dir():
-            path_candidates = list(sorted(base.glob("*.json"))) + list(sorted(base.glob("*.jsonl")))
-            annotations = base / "annotations"
-            if annotations.exists():
-                path_candidates.extend(sorted(annotations.glob("*.json")))
-                path_candidates.extend(sorted(annotations.glob("*.jsonl")))
-            for path_obj in path_candidates:
-                for record in _iter_json_records(path_obj):
-                    if limit is not None and count >= limit:
-                        return
-                    yield _prepare_document(record, path_obj.stem)
-                    count += 1
-            if count:
-                return
-    if root.is_file():
-        for record in _iter_json_records(root):
-            if limit is not None and count >= limit:
-                return
-            yield _prepare_document(record, root.stem)
-            count += 1
-
-def _iter_json_records(path: Path) -> Iterator[Dict[str, Any]]:
-    text = path.read_text(encoding="utf-8")
-    if not text.strip():
-        return iter(())
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        # Fallback to JSON Lines if the file contains multiple JSON objects per line
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                yield json.loads(line)
-        return
-    if isinstance(payload, Mapping):
-        annotations = payload.get("annotations")
-        if isinstance(annotations, Sequence):
-            for item in annotations:
-                if isinstance(item, Mapping):
-                    yield dict(item)
+    for path in sorted(split_path.glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        document = _prepare_document(data, default_doc_id=path.stem)
+        yield document
+        count += 1
+        if limit is not None and count >= limit:
             return
-        yield dict(payload)
-        return
-    if isinstance(payload, Sequence):
-        for item in payload:
-            if isinstance(item, Mapping):
-                yield dict(item)
-        return
-    return iter(())
 
 
-def _prepare_document(raw: Mapping[str, Any], identifier: Optional[str]) -> Dict[str, Any]:
-    document: Dict[str, Any] = dict(raw)
-    doc_id = (
-        document.get("doc_id")
-        or document.get("document_id")
-        or document.get("id")
-        or identifier
-        or ""
-    )
-    document["id"] = str(doc_id)
-    document["doc_id"] = str(doc_id)
-    width, height = _resolve_size(document)
-    document["width"] = width
-    document["height"] = height
+def _prepare_document(raw: Mapping[str, Any], *, default_doc_id: str) -> Dict[str, Any]:
+    doc_id = str(raw.get("doc_id") or raw.get("id") or default_doc_id)
+    page_id = str(raw.get("page_id") or raw.get("page") or 0)
+    width_value = raw.get("width") or raw.get("img_width") or raw.get("page_width")
+    height_value = raw.get("height") or raw.get("img_height") or raw.get("page_height")
+    width = int(width_value) if width_value is not None else 0
+    height = int(height_value) if height_value is not None else 0
+    metadata_raw = raw.get("metadata")
+    metadata = dict(metadata_raw) if isinstance(metadata_raw, Mapping) else {}
+    metadata.setdefault("doc_id", doc_id)
+    metadata.setdefault("page_id", page_id)
+    metadata.setdefault("split", str(raw.get("split") or metadata.get("split") or ""))
+
+    raw_segments = raw.get("segments") or raw.get("entities") or []
+    segments: List[Dict[str, Any]] = []
+    for index, raw_segment in enumerate(raw_segments):
+        if not isinstance(raw_segment, Mapping):
+            continue
+        segment_id = int(
+            raw_segment.get("segment_id") or raw_segment.get("id") or index
+        )
+        label = str(
+            raw_segment.get("label") or raw_segment.get("category") or "segment"
+        )
+        confidence_value = raw_segment.get("confidence")
+        confidence = float(confidence_value) if confidence_value is not None else 0.0
+        polygon = _coerce_polygon(raw_segment.get("polygon") or raw_segment.get("bbox"))
+        tokens = _prepare_tokens(
+            raw_segment.get("tokens") or raw_segment.get("words"),
+            fallback_text=str(raw_segment.get("text", "")),
+        )
+        segments.append(
+            {
+                "segment_id": segment_id,
+                "label": label,
+                "confidence": confidence,
+                "polygon": polygon,
+                "tokens": tokens,
+            }
+        )
+
+    document: Dict[str, Any] = {
+        "doc_id": doc_id,
+        "page_id": page_id,
+        "width": width,
+        "height": height,
+        "segments": segments,
+        "metadata": metadata,
+    }
     return document
 
 
-def _extract_tokens(document: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    candidates: Sequence[Any] = []
-    for key in ("tokens", "words", "ocr_tokens", "ocr", "items", "segments", "lines"):
-        value = document.get(key)
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-            candidates = value
-            break
-        if isinstance(value, Mapping):
-            nested = value.get("tokens") or value.get("words")
-            if isinstance(nested, Sequence) and not isinstance(nested, (str, bytes)):
-                candidates = nested
-                break
-    tokens: List[Dict[str, Any]] = []
-    for index, item in enumerate(candidates):
-        if isinstance(item, Mapping):
-            token = dict(item)
-        else:
-            token = {"text": str(item)}
-        token_id = _coerce_int(token.get("id") or token.get("token_id") or token.get("idx"))
-        if token_id is None:
-            token_id = index
-        token["id"] = int(token_id)
-        tokens.append(token)
-    return tokens
-
-
-def _collect_regions(document: Mapping[str, Any]) -> Tuple[Dict[int, Dict[str, Any]], Dict[int, int]]:
-    candidates: Sequence[Any] = []
-    for key in ("regions", "layout", "elements", "items", "annotations", "boxes"):
-        value = document.get(key)
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-            candidates = value
-            break
-    regions: Dict[int, Dict[str, Any]] = {}
-    token_to_region: Dict[int, int] = {}
-    for index, item in enumerate(candidates):
-        if not isinstance(item, Mapping):
-            continue
-        region = dict(item)
-        region_id = _coerce_int(
-            region.get("id")
-            or region.get("region_id")
-            or region.get("annotation_id")
-            or region.get("idx")
-        )
-        if region_id is None:
-            region_id = index
-        region_id = int(region_id)
-        tokens = region.get("token_ids")
-        if not isinstance(tokens, Sequence) or isinstance(tokens, (str, bytes)):
-            tokens = region.get("tokens") or region.get("words")
-        token_ids: List[int] = []
-        if isinstance(tokens, Sequence) and not isinstance(tokens, (str, bytes)):
-            for token in tokens:
-                if isinstance(token, Mapping):
-                    token_id = _coerce_int(token.get("id") or token.get("token_id") or token.get("idx"))
-                else:
-                    token_id = _coerce_int(token)
-                if token_id is None:
-                    continue
-                token_id = int(token_id)
-                token_ids.append(token_id)
-                token_to_region[token_id] = region_id
-        region["token_ids"] = token_ids
-        region["label"] = _resolve_region_label(region)
-        regions[region_id] = region
-    return regions, token_to_region
-
-
-def _resolve_region_label(region: Optional[Mapping[str, Any]]) -> str:
-    if not region:
-        return "other"
-    for key in ("label", "category", "class", "type", "name", "kind"):
-        value = region.get(key)
-        if value is not None:
-            return str(value)
-    return "other"
-
-
-def _resolve_token_text(token: Mapping[str, Any]) -> str:
-    for key in ("text", "content", "value", "string", "span"):
-        value = token.get(key)
-        if value is not None:
-            return str(value)
-    return ""
-
-
-def _resolve_page_index(source: Mapping[str, Any] | None, default: Optional[int] = None) -> int:
-    if isinstance(source, Mapping):
-        for key in ("page_index", "page", "page_id", "page_number", "page_num", "pageNo"):
-            value = source.get(key)
-            int_value = _coerce_int(value)
-            if int_value is not None:
-                return int(int_value)
-    return int(default or 0)
-
-
-def _resolve_size(document: Mapping[str, Any]) -> tuple[float, float]:
-    for key in ("image_size", "img_size", "size"):
-        size = document.get(key)
-        if isinstance(size, Sequence) and not isinstance(size, (str, bytes)) and len(size) >= 2:
-            width = float(size[0] or 1000)
-            height = float(size[1] or 1000)
-            return max(width, 1.0), max(height, 1.0)
-    page = document.get("page_size")
-    if isinstance(page, Mapping):
-        width = page.get("width") or page.get("w")
-        height = page.get("height") or page.get("h")
-        if width and height:
-            return max(float(width), 1.0), max(float(height), 1.0)
-    width = float(document.get("width") or 1000)
-    height = float(document.get("height") or 1000)
-    return max(width, 1.0), max(height, 1.0)
-
-
-def _normalise_box(box: Any, width: float, height: float) -> List[float]:
-    if isinstance(box, Mapping):
-        candidates = [
-            box.get("x1") or box.get("left"),
-            box.get("y1") or box.get("top"),
-            box.get("x2") or box.get("right"),
-            box.get("y2") or box.get("bottom"),
-        ]
-        if all(value is not None for value in candidates):
-            box = candidates
-    if not isinstance(box, Sequence) or isinstance(box, (str, bytes)) or len(box) < 4:
-        return [0.0, 0.0, 0.0, 0.0]
-    w = max(float(width), 1.0)
-    h = max(float(height), 1.0)
-    left, top, right, bottom = [float(box[i]) for i in range(4)]
-    return [left / w, top / h, right / w, bottom / h]
-
-
-def _coerce_int(value: Any) -> Optional[int]:
+def _coerce_polygon(value: Any) -> List[float]:
     if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+        return []
+    if isinstance(value, Mapping):
+        coords = []
+        for key in ("x1", "y1", "x2", "y2"):
+            coord_value = value.get(key)
+            if coord_value is None:
+                continue
+            coords.append(float(coord_value))
+        if coords:
+            return coords
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        coords = [float(v) for v in value if isinstance(v, (int, float))]
+        return coords
+    return []
 
 
-__all__ = [
-    "build_doclaynet_encoders",
-    "build_doclaynet_registry",
-    "doclaynet_contains_table",
-    "doclaynet_fields",
-    "load_doclaynet_dataset",
-]
+def _polygon_to_bbox(polygon: Sequence[float]) -> Tuple[float, float, float, float]:
+    if not polygon:
+        return (0.0, 0.0, 0.0, 0.0)
+    xs = polygon[0::2]
+    ys = polygon[1::2]
+    if not xs or not ys:
+        return (0.0, 0.0, 0.0, 0.0)
+    x1 = min(xs)
+    y1 = min(ys)
+    x2 = max(xs)
+    y2 = max(ys)
+    return (float(x1), float(y1), float(x2), float(y2))
+
+
+def _normalise_box(
+    box: Tuple[float, float, float, float], width: float, height: float
+) -> Tuple[float, float, float, float]:
+    x1, y1, x2, y2 = box
+    if width <= 0:
+        width = 1.0
+    if height <= 0:
+        height = 1.0
+    return (x1 / width, y1 / height, x2 / width, y2 / height)

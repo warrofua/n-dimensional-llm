@@ -16,6 +16,7 @@ from typing import (
     Sequence,
     Tuple,
     Union,
+    cast,
 )
 
 from nd_llm.encoders import Encoder
@@ -95,7 +96,11 @@ class QueryDotProductScoringStrategy:
     ) -> None:
         if mix_weight < 0.0 or mix_weight > 1.0:
             raise ValueError("mix_weight must fall within [0, 1]")
-        self.fallback = fallback or NormScoringStrategy()
+        self.fallback: ScoringFn
+        if fallback is None:
+            self.fallback = cast(ScoringFn, NormScoringStrategy())
+        else:
+            self.fallback = fallback
         self.normalize = bool(normalize)
         self.mix_weight = mix_weight
         self.query_key = query_key
@@ -108,8 +113,7 @@ class QueryDotProductScoringStrategy:
         metadata: FieldMetadata,
         context: Mapping[str, Any],
     ) -> ScoreVector:
-        fallback = self.fallback or NormScoringStrategy()
-        base_scores = fallback(field, embeddings, metadata, context)
+        base_scores = self.fallback(field, embeddings, metadata, context)
         query = self._resolve_query(context, field)
         if query is None:
             return base_scores
@@ -398,7 +402,7 @@ class IBottleneck:
             quantized = telemetry.quantized_embeddings.get(field, [])
             residual = telemetry.residual_statistics.get(field, {})
 
-            reconstructed_embeddings = []
+            reconstructed_embeddings: List[Dict[str, Any]] = []
             for entry in sorted(quantized, key=lambda item: item.get("index", 0)):
                 embedding = _dequantize_embedding(entry)
                 reconstructed_embeddings.append(
@@ -480,7 +484,7 @@ class IBottleneck:
         for field, embeddings in encoded.items():
             raw_scores = self.scorer(field, embeddings, metadata.get(field, {}), context)
             tensor: Optional[Tensor] = None
-            if torch is not None and torch.is_tensor(raw_scores):
+            if torch is not None and isinstance(raw_scores, torch.Tensor):
                 tensor = raw_scores.squeeze(-1) if raw_scores.ndim > 1 else raw_scores
                 if tensor.ndim != 1:
                     raise ValueError(
@@ -488,7 +492,9 @@ class IBottleneck:
                     )
                 field_scores = [float(v) for v in tensor.detach().cpu().tolist()]
             else:
-                field_scores = [float(v) for v in raw_scores]
+                field_scores = [
+                    float(v) for v in cast(Sequence[float], raw_scores)
+                ]
             if len(field_scores) != len(embeddings):
                 raise ValueError(
                     f"scoring strategy returned {len(field_scores)} scores for {len(embeddings)} embeddings in field '{field}'"
@@ -716,12 +722,10 @@ class IBottleneck:
     def _resolve_objective(self, objective: str) -> ScoringFn:
         key = objective.lower()
         if key in {"l2", "l2-norm", "norm", "magnitude"}:
-            strategy = NormScoringStrategy()
-        elif key in {"query", "query-dot", "query_attention", "attention"}:
-            strategy = QueryDotProductScoringStrategy()
-        else:
-            raise ValueError(f"unknown objective '{objective}'")
-        return strategy
+            return cast(ScoringFn, NormScoringStrategy())
+        if key in {"query", "query-dot", "query_attention", "attention"}:
+            return QueryDotProductScoringStrategy()
+        raise ValueError(f"unknown objective '{objective}'")
 
 
 def _coerce_field_metadata(raw: Any) -> Dict[str, Any]:
@@ -730,8 +734,12 @@ def _coerce_field_metadata(raw: Any) -> Dict[str, Any]:
         return {"keys": [], "salience": False, "metadata": {}, "budget_weight": None}
 
     if hasattr(raw, "keys") and hasattr(raw, "salience"):
-        meta = dict(getattr(raw, "metadata", {}) or {})
-        budget_weight = meta.pop("budget_weight", None) if isinstance(meta, dict) else None
+        metadata_dict = dict(getattr(raw, "metadata", {}) or {})
+        budget_weight = (
+            metadata_dict.pop("budget_weight", None)
+            if isinstance(metadata_dict, dict)
+            else None
+        )
         if budget_weight is not None:
             try:
                 budget_weight = float(budget_weight)
@@ -740,7 +748,7 @@ def _coerce_field_metadata(raw: Any) -> Dict[str, Any]:
         return {
             "keys": list(getattr(raw, "keys", [])),
             "salience": bool(getattr(raw, "salience", False)),
-            "metadata": meta,
+            "metadata": metadata_dict,
             "budget_weight": budget_weight,
         }
 

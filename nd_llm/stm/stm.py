@@ -10,29 +10,39 @@ import threading
 import zlib
 from array import array
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Union
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    TYPE_CHECKING,
+    Union,
+)
 
 from nd_llm.utils.config import STMConfig
 
+if TYPE_CHECKING:  # pragma: no cover - imported for type checking only
+    from torch import Tensor as TorchTensor
+else:
+    TorchTensor = Any  # type: ignore[assignment]
+
 try:  # pragma: no cover - numpy is optional in the test environment
     import numpy as _np  # type: ignore
-
-    _NUMPY_AVAILABLE = True
-    NumpyArray = _np.ndarray
 except Exception:  # pragma: no cover - fallback when numpy is missing
     _np = None  # type: ignore[assignment]
-    _NUMPY_AVAILABLE = False
-    NumpyArray = tuple()  # type: ignore[assignment]
 
 try:  # pragma: no cover - torch is optional in the test environment
     import torch  # type: ignore
-
-    _TORCH_AVAILABLE = True
-    TorchTensor = torch.Tensor  # type: ignore[attr-defined]
 except Exception:  # pragma: no cover - fallback when torch is missing
     torch = None  # type: ignore[assignment]
-    _TORCH_AVAILABLE = False
-    TorchTensor = tuple()  # type: ignore[assignment]
+
+_NUMPY_AVAILABLE = _np is not None
+_TORCH_AVAILABLE = torch is not None
 
 TensorLike = Any
 
@@ -236,9 +246,9 @@ class STM:
         return payload_array.tobytes(), shape, len(flat)
 
     def _to_nested_structure(self, tensor: TensorLike) -> Any:
-        if _NUMPY_AVAILABLE and isinstance(tensor, NumpyArray):  # type: ignore[arg-type]
+        if _NUMPY_AVAILABLE and _np is not None and isinstance(tensor, _np.ndarray):
             return tensor.tolist()
-        if _TORCH_AVAILABLE and isinstance(tensor, TorchTensor):  # type: ignore[arg-type]
+        if _TORCH_AVAILABLE and torch is not None and isinstance(tensor, torch.Tensor):
             return tensor.detach().cpu().tolist()
         if isinstance(tensor, (list, tuple)):
             return [self._to_nested_structure(item) for item in tensor]

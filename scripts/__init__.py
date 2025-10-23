@@ -1,3 +1,3 @@
 """Entry points and helpers for ND-LLM training and evaluation scripts."""
 
-__all__ = []
+__all__: list[str] = []

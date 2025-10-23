@@ -709,8 +709,11 @@ class CompressionRecord:
                     items.append({str(k): v for k, v in entry.items()})
             return items
 
-        policy_metadata = _ensure_mapping(policy_metadata_raw)
-        if not policy_metadata:
+        policy_metadata_dict = _ensure_mapping(policy_metadata_raw)
+        policy_metadata: Optional[Dict[str, Any]]
+        if policy_metadata_dict:
+            policy_metadata = policy_metadata_dict
+        else:
             policy_metadata = None
 
         return cls(
