@@ -12,7 +12,7 @@
 * **Context is scarce.** Token budgets and latency matter; naive concatenation wastes capacity.
 * **Compression should be *learned***—and **query‑aware**—not a post‑hoc heuristic.
 
-**Key takeaway:** When tasks depend on conditionally informative signals beyond text, collapsing everything into a 1‑D projection permanently loses mutual information; synchronized N‑D inputs keep that utility and dominate the rate–distortion trade‑off. See the [full derivation](docs/why-nd-inputs.md) for the proof and the metatheoretical, code-forward whitepaper [*The Tensor Is The Message*](docs/the-tensor-is-the-message.md) for design laws, scaffolding, and quotable guidance.
+**Key takeaway:** When tasks depend on conditionally informative signals beyond text, collapsing everything into a 1‑D projection permanently loses mutual information; synchronized N‑D inputs keep that utility and dominate the rate–distortion trade‑off. See the [full derivation](docs/why-nd-inputs.md) for the proof, the metatheoretical, code-forward whitepaper [*The Tensor Is The Message*](docs/the-tensor-is-the-message.md) for design laws, scaffolding, and quotable guidance, and the [Related Work & Novelty overview](docs/related-work-novelty.md) for the surrounding research landscape.
 
 ---
 
