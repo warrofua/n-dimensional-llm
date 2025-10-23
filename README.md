@@ -98,6 +98,7 @@ A control loop that probes what the model remembers, tunes bottleneck budgets, r
 ## Quickstart
 
 > **Status:** research pre‑release. The code skeleton below shows the intended API; swap in your encoders/LLM as you prototype.
+> For a maintained end-to-end walkthrough, see [`examples/multi_field_invoice.py`](examples/multi_field_invoice.py).
 
 ### Installation
 
@@ -199,7 +200,7 @@ affinity:
 
 ### Runnable multi-field invoice demo
 
-Kick the tyres with the deterministic invoice walk-through that wires the registry, stub encoders, bottleneck, STM, and orchestrator together:
+Kick the tyres with the maintained invoice walk-through that wires the registry, stub encoders, bottleneck, STM, and orchestrator together:
 
 ```bash
 python examples/multi_field_invoice.py
@@ -253,12 +254,17 @@ The default report evaluates several budgets on a repeatable dataset; tweak the 
 
 ## Roadmap
 
-* [ ] MVP: registry + two encoders (text/layout) + simple top‑k bottleneck
-* [ ] IB/RD proxies + target‑budget API
-* [ ] STM v0 (append‑only, local FS) + retrieval hooks
-* [ ] Orchestrator v0 (budget sweeps, retention probes)
-* [ ] Example notebooks + tiny benchmarks
-* [ ] Paper alignment: figures + ablations
+### Shipped milestones
+
+* [x] MVP: registry + two encoders (text/layout) + simple top-k bottleneck — [`nd_llm/registry`](nd_llm/registry), [`nd_llm/encoders`](nd_llm/encoders)
+* [x] IB/RD proxies + target-budget API — [`nd_llm/bottleneck`](nd_llm/bottleneck)
+* [x] STM v0 (append-only, local FS) + retrieval hooks — [`nd_llm/stm`](nd_llm/stm)
+* [x] Orchestrator v0 (budget sweeps, retention probes) — [`nd_llm/orchestration`](nd_llm/orchestration)
+
+### In flight / upcoming
+
+* [ ] Example notebooks + tiny benchmarks to showcase multi-field tasks end-to-end
+* [ ] Paper alignment: figures, ablations, and narrative refinements for the public draft
 
 ---
 
