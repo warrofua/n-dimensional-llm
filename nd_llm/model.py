@@ -479,7 +479,10 @@ class NDEncoderDecoder(nn.Module):
 
         logits = self.decoder(selected_tokens, selected_mask if selected_mask.numel() else None)
 
-        mi_lb_tensor, _ = self.mi(selected_tokens, target_repr)
+        if target_repr is not None and target_repr.numel():
+            mi_lb_tensor, _ = self.mi(selected_tokens, target_repr)
+        else:
+            mi_lb_tensor = selected_tokens.new_tensor(0.0)
         tokens_selected = (
             selected_mask.sum(dim=1)
             if selected_mask.numel()
