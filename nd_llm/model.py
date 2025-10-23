@@ -142,17 +142,17 @@ class CanonicalCellAggregator:
                     idx,
                 )
                 coords = self._extract_coords(entry)
-                metadata_entry: Dict[str, Any] = {
-                    "field": field_name,
-                    "keys": tuple(key_values),
-                    "doc_id": doc_lookup.get(doc_key),
-                    "index": idx,
-                    "value": self._select_value(entry, value_key),
-                    "sort_key": sort_key,
-                }
-                if coords is not None:
-                    metadata_entry["coords"] = tuple(float(value) for value in coords)
-                per_doc[doc_key].append((projected[idx], metadata_entry))
+            metadata_entry: Dict[str, Any] = {
+                "field": field_name,
+                "keys": tuple(key_values),
+                "doc_id": doc_lookup.get(doc_key),
+                "index": idx,
+                "value": self._select_value(entry, value_key),
+                "sort_key": sort_key,
+            }
+            if coords is not None:
+                metadata_entry["coords"] = tuple(float(value) for value in coords)
+            per_doc[doc_key].append((projected[idx], metadata_entry))
 
         doc_order: List[str]
         if doc_ids is not None:
