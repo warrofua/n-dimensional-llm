@@ -90,7 +90,8 @@ class MIProxy(nn.Module):
 
         def _zero_output(batch: int, targets: int) -> Tuple[Tensor, Tensor]:
             logits = torch.zeros((batch, targets), device=device, dtype=dtype)
-            return torch.zeros((), device=device, dtype=dtype), logits
+            zero = torch.zeros((), device=device, dtype=dtype, requires_grad=True)
+            return zero, logits
 
         if z.dim() == 2:
             batch_size = z.size(0)

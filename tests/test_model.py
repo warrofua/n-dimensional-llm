@@ -113,6 +113,7 @@ def test_nd_encoder_decoder_zero_token_budget_has_zero_mi_lb() -> None:
     mi_lb_tensor = logs.get("mi_lb_tensor")
     assert isinstance(mi_lb_tensor, torch.Tensor)
     assert torch.isfinite(mi_lb_tensor).item()
+    assert mi_lb_tensor.requires_grad
     assert float(mi_lb_tensor.item()) == 0.0
 
 
