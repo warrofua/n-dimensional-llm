@@ -48,6 +48,7 @@ python_version = "3.11"
 ignore_missing_imports = true
 follow_imports = "skip"
 files = [
+  "benchmarks",
   "nd_llm/registry",
   "tests",
 ]
