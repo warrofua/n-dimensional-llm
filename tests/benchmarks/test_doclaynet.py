@@ -21,20 +21,24 @@ def test_doclaynet_sample_roundtrip() -> None:
     document = dataset[0]
     fields = doclaynet_fields(document)
 
-    assert set(fields) == {"text", "layout", "region"}
+    assert set(fields) == {"text", "layout", "segment"}
     assert len(fields["text"]) == len(fields["layout"]) >= 1
 
-    layout_by_token = {entry["token_id"]: entry for entry in fields["layout"]}
-    regions_by_id = {entry["region_id"]: entry for entry in fields["region"]}
+    layout_by_token = {
+        (entry["segment_id"], entry["token_id"]): entry for entry in fields["layout"]
+    }
+    segments_by_id = {entry["segment_id"]: entry for entry in fields["segment"]}
 
     for text_entry in fields["text"]:
-        token_id = text_entry["token_id"]
-        assert token_id in layout_by_token
-        layout_entry = layout_by_token[token_id]
-        assert layout_entry["region_id"] == text_entry["region_id"]
-        region_id = text_entry["region_id"]
-        if region_id in regions_by_id:
-            assert token_id in regions_by_id[region_id].get("token_ids", [])
+        token_key = (text_entry["segment_id"], text_entry["token_id"])
+        assert token_key in layout_by_token
+        layout_entry = layout_by_token[token_key]
+        assert layout_entry["segment_id"] == text_entry["segment_id"]
+        segment_id = text_entry["segment_id"]
+        if segment_id in segments_by_id:
+            assert text_entry["token_id"] in segments_by_id[segment_id].get(
+                "token_ids", []
+            )
 
     assert all(0.0 <= coord <= 1.0 for item in fields["layout"] for coord in item.get("xyxy", []))
     assert isinstance(doclaynet_contains_table(document), bool)
@@ -51,8 +55,8 @@ def test_doclaynet_sample_roundtrip() -> None:
         context=mi_context,
         mi_proxy=mi_proxy,
     )
-    assert "region" in result.compressed_fields
-    assert result.compressed_fields["region"], "Expected at least one region to be retained"
+    assert "segment" in result.compressed_fields
+    assert result.compressed_fields["segment"], "Expected at least one segment to be retained"
 
 
 def test_doclaynet_dataset_limit() -> None:

@@ -158,10 +158,15 @@ def build_doclaynet_registry() -> Registry:
 
     registry = Registry()
     registry.add_field(
-        "text", keys=["doc_id", "page_id", "token_id"], salience=True, modality="text"
+        "text",
+        keys=["doc_id", "page_id", "segment_id", "token_id"],
+        salience=True,
+        modality="text",
     )
     registry.add_field(
-        "layout", keys=["doc_id", "page_id", "token_id"], modality="layout"
+        "layout",
+        keys=["doc_id", "page_id", "segment_id", "token_id"],
+        modality="layout",
     )
     registry.add_field(
         "segment", keys=["doc_id", "page_id", "segment_id"], modality="entity"
@@ -233,6 +238,8 @@ def doclaynet_fields(
             tokens, fallback_text=str(raw_segment.get("text", ""))
         )
 
+        token_ids = [int(token["token_id"]) for token in prepared_tokens]
+
         segment_field.append(
             {
                 "doc_id": doc_id,
@@ -241,6 +248,7 @@ def doclaynet_fields(
                 "label": label,
                 "confidence": confidence,
                 "polygon": segment_polygon,
+                "token_ids": token_ids,
             }
         )
 
