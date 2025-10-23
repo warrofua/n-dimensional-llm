@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+title: "Toward N-Dimensional LLMs with Information Bottlenecks"
+authors:
+  - family-names: Farrow
+    given-names: Joshua
+date-released: 2025-01-01
+type: software
+url: "https://github.com/<you>/n-dimensional-llm"
+repository-code: "https://github.com/<you>/n-dimensional-llm"
+abstract: "Grounded, multi-field language models with information-bottleneck compression and semantic tensor memory."

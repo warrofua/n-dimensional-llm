@@ -7,6 +7,7 @@ from typing import Any
 
 __all__ = [
     "run_benchmark",
+    "run_doclaynet_benchmark",
     "run_funsd_benchmark",
     "run_long_qa_benchmark",
     "run_video_qa_benchmark",
@@ -23,6 +24,11 @@ __all__ = [
     "funsd_numeric_answer_label",
     "invoice_fields",
     "load_funsd_dataset",
+    "build_doclaynet_encoders",
+    "build_doclaynet_registry",
+    "doclaynet_fields",
+    "doclaynet_contains_table",
+    "load_doclaynet_dataset",
     "synthetic_invoice",
     "synthetic_invoice_dataset",
     "build_longqa_registry",
@@ -45,6 +51,8 @@ __all__ = [
 def __getattr__(name: str) -> Any:  # pragma: no cover - thin convenience wrapper
     if name == "run_benchmark":
         return import_module("benchmarks.doc_understanding").run_benchmark
+    if name == "run_doclaynet_benchmark":
+        return import_module("benchmarks.doc_understanding").run_doclaynet_benchmark
     if name == "run_funsd_benchmark":
         return import_module("benchmarks.doc_understanding").run_funsd_benchmark
     if name == "run_long_qa_benchmark":
@@ -77,6 +85,15 @@ def __getattr__(name: str) -> Any:  # pragma: no cover - thin convenience wrappe
         "load_funsd_dataset",
     }:
         module = import_module("benchmarks.funsd")
+        return getattr(module, name)
+    if name in {
+        "build_doclaynet_encoders",
+        "build_doclaynet_registry",
+        "doclaynet_fields",
+        "doclaynet_contains_table",
+        "load_doclaynet_dataset",
+    }:
+        module = import_module("benchmarks.doclaynet")
         return getattr(module, name)
     if name in {
         "build_longqa_registry",
