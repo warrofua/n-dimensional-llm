@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from nd_llm.bottleneck import CompressionResult, CompressionTelemetry, IBottleneck
+from nd_llm.metrics import MIProxy
 from nd_llm.encoders import Encoder
 from nd_llm.registry import Registry
 from nd_llm.utils import PackedFields
@@ -336,41 +337,6 @@ class DecoderStub(nn.Module):
         return self.mlp(pooled)
 
 
-class MIProxy(nn.Module):
-    """InfoNCE-style mutual-information proxy."""
-
-    def __init__(self, hidden_dim: int, projection_dim: int = 256, temperature: float = 0.07) -> None:
-        super().__init__()
-        self.query = nn.Sequential(
-            nn.Linear(hidden_dim, projection_dim),
-            nn.ReLU(),
-            nn.Linear(projection_dim, projection_dim),
-        )
-        self.target = nn.Sequential(
-            nn.Linear(hidden_dim, projection_dim),
-            nn.ReLU(),
-            nn.Linear(projection_dim, projection_dim),
-        )
-        self.temperature = float(temperature)
-
-    def forward(self, tokens: Tensor, target_repr: Optional[Tensor]) -> Tuple[Tensor, Tensor]:
-        if target_repr is None or tokens.size(0) == 0:
-            logits = tokens.new_zeros((tokens.size(0), 0))
-            return tokens.new_tensor(0.0), logits
-        if target_repr.size(0) == 0:
-            logits = tokens.new_zeros((tokens.size(0), 0))
-            return tokens.new_tensor(0.0), logits
-        pooled = tokens.mean(dim=1)
-        query = F.normalize(self.query(pooled), dim=-1)
-        target = F.normalize(self.target(target_repr), dim=-1)
-        logits = (query @ target.T) / self.temperature
-        if logits.size(0) == 0:
-            return tokens.new_tensor(0.0), logits
-        labels = torch.arange(logits.size(0), device=logits.device)
-        loss = F.cross_entropy(logits, labels)
-        return -loss, logits
-
-
 class NDEncoderDecoder(nn.Module):
     """End-to-end scaffold wiring registry, aggregation, bottleneck, and decoder."""
 
@@ -381,7 +347,7 @@ class NDEncoderDecoder(nn.Module):
         num_classes: int = 2,
         bottleneck: Optional[IBottleneck] = None,
         decoder: Optional[nn.Module] = None,
-        mi_proxy: Optional[MIProxy] = None,
+        mi_proxy: Optional[nn.Module] = None,
     ) -> None:
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -399,7 +365,7 @@ class NDEncoderDecoder(nn.Module):
             bottleneck = IBottleneck(target_budget=1)
         self.bottleneck = bottleneck
         self.decoder = decoder or DecoderStub(self.hidden_dim, self.num_classes)
-        self.mi = mi_proxy or MIProxy(self.hidden_dim)
+        self.mi = mi_proxy or MIProxy(d_model=self.hidden_dim)
         self._target_projector = nn.Sequential(
             nn.Linear(self.num_classes, self.hidden_dim),
             nn.ReLU(),
