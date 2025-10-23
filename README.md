@@ -287,6 +287,7 @@ paper/Toward-N-Dimensional-LLMs-with-Information-Bottlenecks.pdf
 ## Citing
 
 If you use or build on this work, please cite the accompanying paper.
+You can also find ready-to-use metadata in [CITATION.cff](CITATION.cff).
 
 ```bibtex
 @misc{farrow2025ndllm,

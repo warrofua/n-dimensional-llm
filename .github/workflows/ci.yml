@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+
+      - name: Install dependencies
+        run: pip install -e .[dev]
+
+      - name: Detect tool configurations
+        id: detect_configs
+        run: |
+          if [ -f pyproject.toml ]; then
+            if grep -Eq '^\[tool\.ruff\]' pyproject.toml; then
+              echo "ruff=true" >> "$GITHUB_OUTPUT"
+            fi
+            if grep -Eq '^\[tool\.black\]' pyproject.toml; then
+              echo "black=true" >> "$GITHUB_OUTPUT"
+            fi
+            if grep -Eq '^\[tool\.mypy\]' pyproject.toml; then
+              echo "mypy=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          if [ -f ruff.toml ] || [ -f .ruff.toml ]; then
+            echo "ruff=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f black.toml ] || [ -f .black.toml ]; then
+            echo "black=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f mypy.ini ] || [ -f .mypy.ini ] || [ -f setup.cfg ] || [ -f tox.ini ]; then
+            if grep -Eq '^\[mypy\]' mypy.ini 2>/dev/null || \
+               grep -Eq '^\[mypy\]' .mypy.ini 2>/dev/null || \
+               grep -Eq '^\[mypy\]' setup.cfg 2>/dev/null || \
+               grep -Eq '^\[mypy\]' tox.ini 2>/dev/null; then
+              echo "mypy=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Run Ruff
+        if: steps.detect_configs.outputs.ruff == 'true'
+        run: ruff check .
+
+      - name: Run Black
+        if: steps.detect_configs.outputs.black == 'true'
+        run: black --check .
+
+      - name: Run Mypy
+        if: steps.detect_configs.outputs.mypy == 'true'
+        run: mypy .
+
+      - name: Run tests
+        run: pytest tests/examples/test_multi_field_invoice.py tests/benchmarks/test_doc_understanding.py
