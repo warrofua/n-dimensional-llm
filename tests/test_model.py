@@ -4,12 +4,14 @@ import torch
 
 from nd_llm.bottleneck import CompressionTelemetry
 from nd_llm.encoders import LayoutEncoder, TextEncoder
+from nd_llm.metrics import MIProxy
 from nd_llm.model import NDEncoderDecoder
 
 
 def test_nd_encoder_decoder_emits_compression_telemetry() -> None:
     torch.manual_seed(0)
     model = NDEncoderDecoder(hidden_dim=32, num_classes=2)
+    assert isinstance(model.mi, MIProxy)
     text_encoder = TextEncoder(embedding_dim=8)
     layout_encoder = LayoutEncoder(embedding_dim=6)
 
