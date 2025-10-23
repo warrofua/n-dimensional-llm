@@ -67,6 +67,57 @@ def test_nd_encoder_decoder_emits_compression_telemetry() -> None:
     assert len(selected_metadata) == len(doc_ids)
 
 
+def test_nd_encoder_decoder_zero_token_budget_has_zero_mi_lb() -> None:
+    torch.manual_seed(0)
+    model = NDEncoderDecoder(hidden_dim=32, num_classes=2)
+    text_encoder = TextEncoder(embedding_dim=8)
+    layout_encoder = LayoutEncoder(embedding_dim=6)
+
+    model.register_field(
+        "text",
+        encoder=text_encoder,
+        keys=["doc_id", "span_id"],
+        salience=True,
+        value_key="text",
+    )
+    model.register_field(
+        "layout",
+        encoder=layout_encoder,
+        keys=["doc_id", "span_id"],
+    )
+
+    fields = {
+        "text": [
+            {"doc_id": 0, "span_id": 0, "text": "alpha"},
+            {"doc_id": 1, "span_id": 0, "text": "beta"},
+            {"doc_id": 0, "span_id": 1, "text": "gamma"},
+        ],
+        "layout": [
+            {"doc_id": 0, "span_id": 0, "xyxy": (0.0, 0.0, 1.0, 1.0)},
+            {"doc_id": 1, "span_id": 0, "xyxy": (1.0, 1.0, 2.0, 2.0)},
+            {"doc_id": 0, "span_id": 1, "xyxy": (0.5, 0.5, 1.5, 1.5)},
+        ],
+    }
+    doc_ids = [0, 1]
+    batch = {
+        "fields": fields,
+        "doc_ids": doc_ids,
+        "targets": torch.tensor([1, 0], dtype=torch.long),
+    }
+
+    logits, logs = model(batch, token_budget=0)
+
+    assert logits.shape[0] == len(doc_ids)
+    mi_lb = logs.get("mi_lb")
+    assert isinstance(mi_lb, float)
+    assert mi_lb == 0.0
+    mi_lb_tensor = logs.get("mi_lb_tensor")
+    assert isinstance(mi_lb_tensor, torch.Tensor)
+    assert torch.isfinite(mi_lb_tensor).item()
+    assert mi_lb_tensor.requires_grad
+    assert float(mi_lb_tensor.item()) == 0.0
+
+
 def test_canonical_cell_aggregator_preserves_all_tokens() -> None:
     torch.manual_seed(0)
     model = NDEncoderDecoder(hidden_dim=16, num_classes=2)
