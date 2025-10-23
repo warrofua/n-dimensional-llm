@@ -85,23 +85,23 @@ class CanonicalCellAggregator:
                     doc_values=[],
                     token_counts=[],
                 )
-            doc_order: List[str] = []
-            doc_values: List[Any] = []
+            doc_order_empty: List[str] = []
+            doc_values_empty: List[Any] = []
             for raw in doc_ids:
                 normalised = _normalise_identifier(raw)
-                doc_order.append(normalised)
-                doc_values.append(raw)
-            tokens = torch.zeros(len(doc_order), 0, self._hidden_dim, device=device)
-            mask = torch.zeros(len(doc_order), 0, dtype=torch.bool, device=device)
-            metadata: List[List[Mapping[str, Any]]] = [[] for _ in doc_order]
-            token_counts = [0 for _ in doc_order]
+                doc_order_empty.append(normalised)
+                doc_values_empty.append(raw)
+            tokens = torch.zeros(len(doc_order_empty), 0, self._hidden_dim, device=device)
+            mask = torch.zeros(len(doc_order_empty), 0, dtype=torch.bool, device=device)
+            empty_metadata: List[List[Mapping[str, Any]]] = [[] for _ in doc_order_empty]
+            empty_token_counts = [0 for _ in doc_order_empty]
             return _AggregatedBatch(
                 tokens=tokens,
                 mask=mask,
-                metadata=metadata,
-                doc_order=doc_order,
-                doc_values=doc_values,
-                token_counts=token_counts,
+                metadata=empty_metadata,
+                doc_order=doc_order_empty,
+                doc_values=doc_values_empty,
+                token_counts=empty_token_counts,
             )
         per_doc: Dict[str, List[Tuple[Tensor, Mapping[str, Any]]]] = defaultdict(list)
         doc_lookup: Dict[str, Any] = {}
@@ -142,7 +142,7 @@ class CanonicalCellAggregator:
                     idx,
                 )
                 coords = self._extract_coords(entry)
-                metadata: Dict[str, Any] = {
+                metadata_entry: Dict[str, Any] = {
                     "field": field_name,
                     "keys": tuple(key_values),
                     "doc_id": doc_lookup.get(doc_key),
@@ -151,8 +151,8 @@ class CanonicalCellAggregator:
                     "sort_key": sort_key,
                 }
                 if coords is not None:
-                    metadata["coords"] = tuple(float(value) for value in coords)
-                per_doc[doc_key].append((projected[idx], metadata))
+                    metadata_entry["coords"] = tuple(float(value) for value in coords)
+                per_doc[doc_key].append((projected[idx], metadata_entry))
 
         doc_order: List[str]
         if doc_ids is not None:
@@ -573,8 +573,11 @@ class NDEncoderDecoder(nn.Module):
                 field = str(entry.get("field"))
                 if field not in selected_lookup:
                     continue
+                index_raw = entry.get("index")
+                if index_raw is None:
+                    continue
                 try:
-                    index_val = int(entry.get("index"))
+                    index_val = int(index_raw)
                 except (TypeError, ValueError):
                     continue
                 if index_val not in selected_lookup[field]:

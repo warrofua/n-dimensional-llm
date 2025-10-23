@@ -10,6 +10,11 @@ __all__ = [
     "run_funsd_benchmark",
     "run_long_qa_benchmark",
     "run_video_qa_benchmark",
+    "build_doclaynet_registry",
+    "build_doclaynet_encoders",
+    "doclaynet_fields",
+    "doclaynet_contains_table",
+    "load_doclaynet_dataset",
     "AmountEncoder",
     "build_invoice_encoders",
     "build_invoice_registry",
@@ -56,6 +61,15 @@ def __getattr__(name: str) -> Any:  # pragma: no cover - thin convenience wrappe
         "synthetic_invoice_dataset",
     }:
         module = import_module("benchmarks.synthetic")
+        return getattr(module, name)
+    if name in {
+        "build_doclaynet_registry",
+        "build_doclaynet_encoders",
+        "doclaynet_fields",
+        "doclaynet_contains_table",
+        "load_doclaynet_dataset",
+    }:
+        module = import_module("benchmarks.doclaynet")
         return getattr(module, name)
     if name in {
         "build_funsd_encoders",
