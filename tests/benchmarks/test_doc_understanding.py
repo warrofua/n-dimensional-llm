@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from benchmarks.doc_understanding import run_benchmark, run_funsd_benchmark
+from benchmarks.doc_understanding import (
+    run_benchmark,
+    run_doclaynet_benchmark,
+    run_funsd_benchmark,
+)
 
 
 def test_run_benchmark_smoke() -> None:
@@ -49,6 +53,25 @@ def test_run_funsd_benchmark_smoke() -> None:
     assert entry["budget"] == 6
     assert 0.0 <= entry["accuracy"] <= 1.0
     assert isinstance(entry["metrics"], dict)
+    assert "cell_fusions" in entry
+    assert entry["cell_fusions"]
+    assert "ablations" in entry
+    assert isinstance(entry["ablations"], dict)
+
+
+def test_run_doclaynet_benchmark_smoke() -> None:
+    report = run_doclaynet_benchmark(budget_values=(4,), dataset_size=2, use_sample=True)
+
+    assert report["dataset"] == "DocLayNet"
+    assert report["dataset_size"] == 2
+    assert report["use_sample"] is True
+    assert len(report["budgets"]) == 1
+
+    entry = report["budgets"][0]
+    assert entry["budget"] == 4
+    assert 0.0 <= entry["accuracy"] <= 1.0
+    assert isinstance(entry["metrics"], dict)
+    assert "encoder_latency_seconds" in entry["metrics"]
     assert "cell_fusions" in entry
     assert entry["cell_fusions"]
     assert "ablations" in entry
