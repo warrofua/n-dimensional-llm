@@ -101,7 +101,7 @@ A control loop that probes what the model remembers, tunes bottleneck budgets, r
 
 ```bash
 # clone
-git clone https://github.com/<you>/n-dimensional-llm.git
+git clone https://github.com/warrofua/n-dimensional-llm.git
 cd n-dimensional-llm
 
 # (optional) create env
@@ -285,7 +285,7 @@ You can also find ready-to-use metadata in [CITATION.cff](CITATION.cff).
   title        = {Toward N-Dimensional LLMs with Information Bottlenecks},
   author       = {Farrow, Joshua},
   year         = {2025},
-  url          = {https://github.com/<you>/n-dimensional-llm},
+  url          = {https://github.com/warrofua/n-dimensional-llm},
   note         = {Preprint}
 }
 ```
