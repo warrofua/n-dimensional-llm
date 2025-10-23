@@ -415,7 +415,9 @@ class Registry:
 
     def to_yaml(self) -> str:
         self._ensure_yaml_available()
-        return yaml.safe_dump(self.to_dict(), sort_keys=False)  # type: ignore[union-attr]
+        return yaml.safe_dump(
+            self.to_dict(), sort_keys=False
+        )  # type: ignore[union-attr]
 
     @classmethod
     def from_yaml(cls, source: Union[str, Path, Any]) -> "Registry":
@@ -486,5 +488,6 @@ class Registry:
         if missing_source or missing_target:
             raise ValueError(
                 "Affinity keys must be present in both fields: "
-                f"missing_from_source={missing_source}, missing_from_target={missing_target}"
+                f"missing_from_source={missing_source}, "
+                f"missing_from_target={missing_target}"
             )
