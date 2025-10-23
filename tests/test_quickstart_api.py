@@ -14,6 +14,7 @@ from nd_llm import (
     pack_fields,
 )
 from nd_llm.encoders import LayoutEncoder, TextEncoder
+from nd_llm.utils import build_mi_proxy_context
 
 
 def _as_list(value):
@@ -52,7 +53,17 @@ def test_quickstart_workflow(tmp_path: Path) -> None:
     assert batches["bbox"][0] == boxes[0]
 
     bottleneck = IBottleneck(target_budget=2)
-    result = bottleneck.compress(batches, registry.encoders)
+    mi_proxy, mi_context = build_mi_proxy_context(
+        batches,
+        registry.encoders,
+        preferred_fields=("text",),
+    )
+    result = bottleneck.compress(
+        batches,
+        registry.encoders,
+        context=mi_context,
+        mi_proxy=mi_proxy,
+    )
     assert set(result.compressed_fields) == {"text", "bbox"}
 
     stm = STM.from_path(tmp_path / "stm-store")

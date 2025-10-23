@@ -29,6 +29,7 @@ from nd_llm.stm import STM
 from nd_llm.utils import (
     DEFAULT_BACKEND,
     aggregate_fields,
+    build_mi_proxy_context,
     rasterize_cells,
     OrchestratorConfig,
     STMConfig,
@@ -120,6 +121,7 @@ def run_benchmark(
             retention_probe_sample_size=5,
             seed=seed,
             ablations=ablations,
+            mi_field_priorities=("text", "layout", "amount"),
         )
         runs.append(budget_run)
 
@@ -162,6 +164,7 @@ def run_funsd_benchmark(
             retention_probe_sample_size=3,
             seed=seed,
             ablations=ablations,
+            mi_field_priorities=("text", "layout"),
         )
         runs.append(budget_run)
 
@@ -187,6 +190,7 @@ def _evaluate_budget(
     retention_probe_sample_size: int,
     seed: int,
     ablations: Optional[Mapping[str, "AblationFn"]] = None,
+    mi_field_priorities: Optional[Sequence[str]] = None,
 ) -> BudgetRun:
     bottleneck = IBottleneck(target_budget=int(budget))
 
@@ -234,7 +238,17 @@ def _evaluate_budget(
             label_counts[label] += 1
 
             start_time = time.perf_counter()
-            result = bottleneck.compress(fields, encoders=registry_encoders)
+            mi_proxy, mi_context = build_mi_proxy_context(
+                fields,
+                registry_encoders,
+                preferred_fields=mi_field_priorities,
+            )
+            result = bottleneck.compress(
+                fields,
+                encoders=registry_encoders,
+                context=mi_context,
+                mi_proxy=mi_proxy,
+            )
             latency = time.perf_counter() - start_time
             total_latency += latency
             total_flops += _estimate_encoder_flops(fields, registry_encoders)
@@ -283,7 +297,17 @@ def _evaluate_budget(
                         doc_index=doc_index,
                     )
                     ab_start = time.perf_counter()
-                    ab_result = bottleneck.compress(mutated_fields, encoders=registry_encoders)
+                    ab_proxy, ab_context = build_mi_proxy_context(
+                        mutated_fields,
+                        registry_encoders,
+                        preferred_fields=mi_field_priorities,
+                    )
+                    ab_result = bottleneck.compress(
+                        mutated_fields,
+                        encoders=registry_encoders,
+                        context=ab_context,
+                        mi_proxy=ab_proxy,
+                    )
                     ab_latency = time.perf_counter() - ab_start
                     ab_prediction = predict_fn(ab_result, document)
                     ab_kept = sum(

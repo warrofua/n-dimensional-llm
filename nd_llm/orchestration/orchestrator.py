@@ -887,8 +887,7 @@ class Orchestrator:
                 merged_compression = dict(existing_compression)
                 merged_compression.update(compression_metadata)
             else:
-                merged_compression = compression_metadata
-            metadata["compression"] = merged_compression
+                merged_compression = dict(compression_metadata)
 
             summary = merged_compression.get("summary", {})
             compression_record = event.compression
@@ -925,8 +924,9 @@ class Orchestrator:
 
             event.compression = compression_record
             compression_metadata = compression_record.as_metadata()
-            metadata["compression"] = compression_metadata
-            summary = compression_metadata.get("summary", {})
+            merged_compression.update(compression_metadata)
+            metadata["compression"] = merged_compression
+            summary = merged_compression.get("summary", {})
             if isinstance(summary, Mapping):
                 for field in (
                     "compression_ratio",

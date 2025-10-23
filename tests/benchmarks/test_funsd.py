@@ -8,6 +8,7 @@ from benchmarks.funsd import (
     load_funsd_dataset,
 )
 from nd_llm.bottleneck import IBottleneck
+from nd_llm.utils import build_mi_proxy_context
 
 
 def test_funsd_sample_roundtrip() -> None:
@@ -24,6 +25,17 @@ def test_funsd_sample_roundtrip() -> None:
     assert len(fields["text"]) == len(fields["layout"])
     assert all(0.0 <= coord <= 1.0 for item in fields["layout"] for coord in item.get("xyxy", []))
 
-    result = IBottleneck(target_budget=6).compress(fields, encoders=registry.encoders)
+    bottleneck = IBottleneck(target_budget=6)
+    mi_proxy, mi_context = build_mi_proxy_context(
+        fields,
+        registry.encoders,
+        preferred_fields=("text",),
+    )
+    result = bottleneck.compress(
+        fields,
+        encoders=registry.encoders,
+        context=mi_context,
+        mi_proxy=mi_proxy,
+    )
     assert "text" in result.compressed_fields
     assert isinstance(funsd_numeric_answer_label(document), bool)

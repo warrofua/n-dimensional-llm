@@ -13,6 +13,7 @@ from nd_llm.encoders import Encoder, LayoutEncoder, TextEncoder
 from nd_llm.metrics import MIProxy
 from nd_llm.orchestration.orchestrator import CompressionRecord
 from nd_llm.registry import Registry
+from nd_llm.utils import build_mi_proxy_context
 
 
 class MockEncoder:
@@ -226,3 +227,21 @@ def test_compression_summary_includes_mutual_information_metric():
     summary = record.summary()
     assert "mi_lower_bound" in summary
     assert summary["mi_lower_bound"] == pytest.approx(mi_value)
+
+
+def test_mi_lower_bound_is_nonzero_for_aligned_fields():
+    fields = {
+        "alpha": ["a0", "a1"],
+        "beta": ["b0", "b1"],
+    }
+    encoders = {
+        "alpha": MockEncoder([[1.2, 0.1], [1.1, 0.2]]),
+        "beta": MockEncoder([[0.2, 1.1], [0.1, 1.0]]),
+    }
+    proxy, context = build_mi_proxy_context(fields, encoders, preferred_fields=("alpha", "beta"))
+    assert proxy is not None, "Expected MI proxy to be instantiated for aligned fields"
+    bottleneck = IBottleneck(target_budget=4)
+    result = bottleneck.compress(fields, encoders, context=context, mi_proxy=proxy)
+    mi_value = result.metrics.get("mi_lower_bound")
+    assert mi_value is not None
+    assert abs(mi_value) > 1e-6
