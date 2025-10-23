@@ -14,6 +14,7 @@ __all__ = [
     "build_doclaynet_registry",
     "build_doclaynet_encoders",
     "doclaynet_fields",
+    "doclaynet_contains_table",
     "load_doclaynet_dataset",
     "AmountEncoder",
     "build_invoice_encoders",
@@ -73,6 +74,7 @@ def __getattr__(name: str) -> Any:  # pragma: no cover - thin convenience wrappe
         "build_doclaynet_registry",
         "build_doclaynet_encoders",
         "doclaynet_fields",
+        "doclaynet_contains_table",
         "load_doclaynet_dataset",
     }:
         module = import_module("benchmarks.doclaynet")

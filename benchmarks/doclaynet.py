@@ -26,6 +26,7 @@ __all__ = [
     "build_doclaynet_registry",
     "build_doclaynet_encoders",
     "doclaynet_fields",
+    "doclaynet_contains_table",
 ]
 
 
@@ -276,6 +277,38 @@ def doclaynet_fields(
     return {"text": text_field, "layout": layout_field, "segment": segment_field}
 
 
+def doclaynet_contains_table(document: Mapping[str, Any]) -> bool:
+    """Return ``True`` when a DocLayNet page includes a table segment."""
+
+    metadata = document.get("metadata")
+    if isinstance(metadata, Mapping):
+        for key in ("contains_table", "containsTable", "has_table"):
+            flag = metadata.get(key)
+            coerced = _coerce_bool(flag)
+            if coerced is not None:
+                return coerced
+
+    segments = document.get("segments") or document.get("entities")
+    if isinstance(segments, Sequence):
+        for segment in segments:
+            if not isinstance(segment, Mapping):
+                continue
+            label = (
+                segment.get("label") or segment.get("category") or segment.get("type")
+            )
+            if isinstance(label, str) and "table" in label.lower():
+                return True
+
+            segment_metadata = segment.get("metadata")
+            if isinstance(segment_metadata, Mapping):
+                flag = segment_metadata.get("contains_table")
+                coerced = _coerce_bool(flag)
+                if coerced:
+                    return True
+
+    return False
+
+
 def _prepare_tokens(
     tokens: Optional[Iterable[Any]],
     *,
@@ -395,6 +428,20 @@ def _prepare_document(raw: Mapping[str, Any], *, default_doc_id: str) -> Dict[st
         "metadata": metadata,
     }
     return document
+
+
+def _coerce_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y"}:
+            return True
+        if lowered in {"false", "0", "no", "n"}:
+            return False
+    return None
 
 
 def _coerce_polygon(value: Any) -> List[float]:
