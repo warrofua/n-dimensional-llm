@@ -220,7 +220,7 @@ def run_doclaynet_benchmark(
             retention_probe_sample_size=3,
             seed=seed,
             ablations=ablations,
-            mi_field_priorities=("layout", "text", "region"),
+            mi_field_priorities=("layout", "text", "segment"),
         )
         runs.append(budget_run)
 
@@ -634,7 +634,7 @@ def _doclaynet_ablation_suite(seed: int) -> Dict[str, AblationFn]:
         "drop_layout": _drop_field_ablation("layout"),
         "drop_text": _drop_field_ablation("text"),
         "perturb_layout": _perturb_layout_ablation(scale=0.03),
-        "shuffle_regions": _shuffle_field_ablation("region"),
+        "shuffle_segments": _shuffle_field_ablation("segment"),
     }
 
 
@@ -964,11 +964,18 @@ def _copy_nested_list(value: Any) -> Any:
 
 
 def _doclaynet_predict_contains_table(result: CompressionResult, _: Mapping[str, Any]) -> bool:
-    for region in result.compressed_fields.get("region", []):
-        if isinstance(region, Mapping):
-            label = region.get("label") or region.get("region_label")
+    segments = result.compressed_fields.get("segment")
+    if segments is None:
+        segments = result.compressed_fields.get("region", [])
+    for segment in segments:
+        if isinstance(segment, Mapping):
+            label = (
+                segment.get("label")
+                or segment.get("segment_label")
+                or segment.get("region_label")
+            )
         else:
-            label = region
+            label = segment
         if isinstance(label, str) and label.lower() == "table":
             return True
     for token in result.compressed_fields.get("text", []):
@@ -984,26 +991,46 @@ def _doclaynet_predict_contains_table(result: CompressionResult, _: Mapping[str,
 
 def _doclaynet_metadata(document: Mapping[str, Any], result: CompressionResult) -> Mapping[str, Any]:
     doc_id = document.get("doc_id") or document.get("id")
-    kept_regions = []
-    for region in result.compressed_fields.get("region", []):
-        if isinstance(region, Mapping):
-            label = region.get("label") or region.get("region_label")
-            region_id = region.get("region_id")
+    segments = result.compressed_fields.get("segment")
+    if segments is None:
+        segments = result.compressed_fields.get("region", [])
+    kept_segments = []
+    for segment in segments:
+        if isinstance(segment, Mapping):
+            label = (
+                segment.get("label")
+                or segment.get("segment_label")
+                or segment.get("region_label")
+            )
+            segment_id = (
+                segment.get("segment_id")
+                if segment.get("segment_id") is not None
+                else segment.get("region_id")
+            )
         else:
-            label = region
-            region_id = None
-        kept_regions.append(
+            label = segment
+            segment_id = None
+        kept_segments.append(
             {
-                "region_id": region_id,
+                "segment_id": segment_id,
+                "region_id": segment_id,
                 "label": str(label) if label is not None else "",
             }
         )
-    return {
+
+    metadata = {
         "doc_id": doc_id,
         "contains_table": doclaynet_contains_table(document),
-        "kept_regions": kept_regions,
-        "kept_region_count": len(kept_regions),
+        "kept_segments": kept_segments,
+        "kept_segment_count": len(kept_segments),
     }
+    # Preserve legacy keys for downstream consumers expecting the old naming.
+    metadata["kept_regions"] = [
+        {"region_id": entry.get("region_id"), "label": entry.get("label", "")}
+        for entry in kept_segments
+    ]
+    metadata["kept_region_count"] = metadata["kept_segment_count"]
+    return metadata
 
 
 def _funsd_predict_numeric_answer(result: CompressionResult, _: Mapping[str, Any]) -> bool:
