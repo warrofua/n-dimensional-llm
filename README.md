@@ -310,7 +310,7 @@ Code of conduct and contribution guide will live in `CONTRIBUTING.md`.
 
 ## License
 
-TBD (recommendation: **Apache‑2.0** for permissive use with patent grant).
+This project is licensed under the [Apache License 2.0](LICENSE), offering a permissive grant for use, modification, and distribution while protecting contributors with an explicit patent license.
 
 ---
 
