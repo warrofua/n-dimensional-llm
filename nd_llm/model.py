@@ -641,7 +641,7 @@ class NDEncoderDecoder(nn.Module):
         fields: Mapping[str, Sequence[Any]] | PackedFields,
     ) -> Mapping[str, Sequence[Any]]:
         if isinstance(fields, PackedFields):
-            return fields.as_dict()
+            return fields.with_keys()
         if isinstance(fields, Mapping):
             return {name: list(entries) for name, entries in fields.items()}
         raise TypeError("fields must be a mapping or PackedFields instance")
