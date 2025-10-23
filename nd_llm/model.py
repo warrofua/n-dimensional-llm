@@ -479,6 +479,24 @@ class NDEncoderDecoder(nn.Module):
 
         logits = self.decoder(selected_tokens, selected_mask if selected_mask.numel() else None)
 
+        if (
+            target_repr is not None
+            and target_repr.numel()
+            and selected_tokens.numel()
+        ):
+            mi_lb_tensor, _ = self.mi(selected_tokens, target_repr)
+        else:
+            reference_tensor: Tensor
+            if isinstance(target_repr, Tensor):
+                reference_tensor = target_repr
+            else:
+                reference_tensor = selected_tokens
+            mi_lb_tensor = reference_tensor.new_tensor(0.0)
+        tokens_selected = (
+            selected_mask.sum(dim=1)
+            if selected_mask.numel()
+            else torch.zeros(tokens.size(0), device=tokens.device)
+        )
         batch_size = selected_tokens.size(0)
         hidden_dim = selected_tokens.size(2) if selected_tokens.ndim == 3 else self.hidden_dim
         if batch_size == 0:
