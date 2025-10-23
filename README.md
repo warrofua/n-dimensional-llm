@@ -72,25 +72,22 @@ A control loop that probes what the model remembers, tunes bottleneck budgets, r
 
 ---
 
-## Repo layout (proposed)
+## Repo layout
 
 ```
 .
-├── nd_llm/                 # Library code (registry, encoders, bottleneck, STM, orchestrator)
-│   ├── registry/
-│   ├── encoders/
-│   ├── bottleneck/
-│   ├── stm/
-│   ├── orchestration/
-│   └── utils/
-├── examples/              # Minimal runnable demos / notebooks
-├── benchmarks/            # Tasks and evaluation harness
-├── scripts/               # Training, evaluation, data prep
-├── tests/
-├── docs/
-│   └── figures/
-└── paper/
-    └── Toward-N-Dimensional-LLMs-with-Information-Bottlenecks.pdf  # ← add your PDF here
+├── nd_llm/                 # Library code (registry, encoders, bottleneck, STM, orchestration, utils, metrics)
+├── benchmarks/            # Evaluation harnesses and synthetic/sample datasets
+│   └── data/              # Bundled JSONL samples for offline smoke tests
+├── docs/                  # Design notes, derivations, and research context
+├── examples/              # Runnable demos / notebooks
+├── scripts/               # Training, evaluation, data prep CLIs
+├── tests/                 # Unit and smoke tests covering the public API
+├── README.md
+├── LICENSE
+├── CITATION.cff
+├── pyproject.toml
+└── Toward N-Dimensional LLMs with Information Bottlenecks.pdf  # Research draft (replace with yours)
 ```
 
 ---
@@ -274,13 +271,7 @@ The default report evaluates several budgets on a repeatable dataset; tweak the 
 
 ## Research artifact
 
-Place the draft here:
-
-```
-paper/Toward-N-Dimensional-LLMs-with-Information-Bottlenecks.pdf
-```
-
-(Optionally mirror to `docs/` and link from GitHub Pages.)
+The working draft lives at `Toward N-Dimensional LLMs with Information Bottlenecks.pdf` in the repository root. Replace that file with your latest revision (and optionally mirror it under `docs/` for GitHub Pages).
 
 ---
 
