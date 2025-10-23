@@ -27,8 +27,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://example.com/nd-llm"
-Source = "https://example.com/nd-llm/source"
+Homepage = "https://github.com/n-dimensional-llm/n-dimensional-llm"
+Documentation = "https://github.com/n-dimensional-llm/n-dimensional-llm/tree/main/docs"
+Repository = "https://github.com/n-dimensional-llm/n-dimensional-llm"
+"Bug Tracker" = "https://github.com/n-dimensional-llm/n-dimensional-llm/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -37,6 +39,10 @@ dev = [
   "ruff>=0.4",
   "mypy>=1.8",
   "pre-commit>=3.5",
+]
+docs = [
+  "mkdocs>=1.5",
+  "mkdocs-material>=9.5",
 ]
 
 [tool.setuptools.packages.find]
