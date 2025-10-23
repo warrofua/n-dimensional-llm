@@ -4,8 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Union,
+    cast,
+)
 
 from nd_llm.encoders import Encoder
 
@@ -220,10 +230,29 @@ def _fallback_safe_dump(data: Any, sort_keys: bool = False) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
+class _YamlAPI(Protocol):
+    """Subset of the PyYAML API used by the registry helpers."""
+
+    def safe_load(self, stream: Any) -> Any: ...
+
+    def safe_dump(self, data: Any, **kwargs: Any) -> str: ...
+
+
+class _FallbackYaml:
+    """Drop-in object that mirrors the subset of PyYAML we rely on."""
+
+    def safe_load(self, stream: Any) -> Any:
+        return _fallback_safe_load(stream)
+
+    def safe_dump(self, data: Any, **kwargs: Any) -> str:
+        sort_keys = bool(kwargs.get("sort_keys", False))
+        return _fallback_safe_dump(data, sort_keys=sort_keys)
+
+
 if _pyyaml is None:  # pragma: no cover - exercised in environments without PyYAML
-    yaml = SimpleNamespace(safe_load=_fallback_safe_load, safe_dump=_fallback_safe_dump)
+    yaml: _YamlAPI = _FallbackYaml()
 else:  # pragma: no cover - prefer system PyYAML when available
-    yaml = _pyyaml
+    yaml = cast(_YamlAPI, _pyyaml)
 
 
 @dataclass(slots=True)
