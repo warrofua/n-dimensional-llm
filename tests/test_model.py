@@ -340,6 +340,13 @@ def test_nd_encoder_decoder_zero_budget_yields_zero_mi() -> None:
     batch = {
         "fields": fields,
         "doc_ids": doc_ids,
+    }
+
+    logits, logs = model(batch, token_budget=2)
+
+    assert logits.shape == (len(doc_ids), model.num_classes)
+    assert "targets" not in logs
+    assert "target_repr" not in logs
         "targets": torch.tensor([1, 2], dtype=torch.long),
     }
 
