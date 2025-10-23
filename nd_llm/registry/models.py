@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib import import_module
+from types import ModuleType
 from pathlib import Path
 from typing import (
     Any,
@@ -19,10 +21,11 @@ from typing import (
 
 from nd_llm.encoders import Encoder
 
+_pyyaml: ModuleType | None
 try:  # pragma: no cover - import shim for optional dependency
-    import yaml as _pyyaml  # type: ignore[import-not-found,import-untyped]
+    _pyyaml = import_module("yaml")
 except ModuleNotFoundError:  # pragma: no cover - dependency injection point
-    _pyyaml = None  # type: ignore[assignment]
+    _pyyaml = None
 
 
 def _split_flow_items(text: str) -> List[str]:
@@ -249,8 +252,9 @@ class _FallbackYaml:
         return _fallback_safe_dump(data, sort_keys=sort_keys)
 
 
+yaml: _YamlAPI
 if _pyyaml is None:  # pragma: no cover - exercised in environments without PyYAML
-    yaml: _YamlAPI = _FallbackYaml()
+    yaml = _FallbackYaml()
 else:  # pragma: no cover - prefer system PyYAML when available
     yaml = cast(_YamlAPI, _pyyaml)
 
@@ -444,9 +448,7 @@ class Registry:
 
     def to_yaml(self) -> str:
         self._ensure_yaml_available()
-        return yaml.safe_dump(
-            self.to_dict(), sort_keys=False
-        )  # type: ignore[union-attr]
+        return yaml.safe_dump(self.to_dict(), sort_keys=False)
 
     @classmethod
     def from_yaml(cls, source: Union[str, Path, Any]) -> "Registry":
@@ -487,17 +489,17 @@ class Registry:
         Registry._ensure_yaml_available()
         if hasattr(source, "read"):
             content = source.read()
-            return yaml.safe_load(content)  # type: ignore[union-attr]
+            return yaml.safe_load(content)
 
         if isinstance(source, (str, Path)):
             path = Path(source)
             if isinstance(source, str) and (
                 "\n" in source or ":" in source or source.strip().startswith("{")
             ):
-                return yaml.safe_load(source)  # type: ignore[union-attr]
+                return yaml.safe_load(source)
             if path.exists():
-                return yaml.safe_load(path.read_text())  # type: ignore[union-attr]
-            return yaml.safe_load(str(source))  # type: ignore[union-attr]
+                return yaml.safe_load(path.read_text())
+            return yaml.safe_load(str(source))
 
         raise TypeError("Unsupported YAML source type")
 
