@@ -14,6 +14,7 @@ from benchmarks.synthetic import (
     invoice_fields,
     synthetic_invoice_dataset,
 )
+from nd_llm.bottleneck import IBottleneck
 from nd_llm.model import NDEncoderDecoder
 
 
@@ -52,12 +53,25 @@ class InvoiceDataset(Dataset):
         }
 
 
-def build_invoice_model(*, hidden_dim: int = 128, num_classes: int = 2) -> NDEncoderDecoder:
+def build_invoice_model(
+    *,
+    hidden_dim: int = 128,
+    num_classes: int = 2,
+    scorer: Optional[Any] = None,
+) -> NDEncoderDecoder:
     """Construct an :class:`NDEncoderDecoder` initialised for invoices."""
 
     registry = build_invoice_registry()
     encoders = build_invoice_encoders(registry)
-    model = NDEncoderDecoder(hidden_dim=hidden_dim, num_classes=num_classes)
+    if scorer is not None:
+        bottleneck = IBottleneck(target_budget=1, scorer_config=scorer)
+    else:
+        bottleneck = IBottleneck(target_budget=1)
+    model = NDEncoderDecoder(
+        hidden_dim=hidden_dim,
+        num_classes=num_classes,
+        bottleneck=bottleneck,
+    )
     for name, spec in registry.fields.items():
         value_key: Optional[str]
         if name == "text":

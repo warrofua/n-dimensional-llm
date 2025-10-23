@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
 
+from nd_llm.bottleneck import CompressionTelemetry
 from .common import (
     average_accuracy,
     build_invoice_dataloader,
@@ -34,6 +36,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Optional path to write training history as JSON",
+    )
+    parser.add_argument(
+        "--scorer",
+        type=str,
+        default=None,
+        help="Optional bottleneck scorer configuration (string or JSON)",
     )
     return parser
 
@@ -77,7 +85,7 @@ def _train_epoch(
     budget: int,
     alpha: float,
     beta: float,
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     device = next(model.parameters()).device
     model.train()
     totals: Dict[str, float] = {
@@ -89,6 +97,8 @@ def _train_epoch(
         "accuracy": 0.0,
         "tokens": 0.0,
     }
+    field_budget_totals: Dict[str, float] = defaultdict(float)
+    allocation_weight_totals: Dict[str, float] = defaultdict(float)
     steps = 0
     for batch in dataloader:
         batch_targets = batch.get("targets")
@@ -108,10 +118,26 @@ def _train_epoch(
         tokens_tensor = logs.get("tokens_selected")
         if isinstance(tokens_tensor, torch.Tensor) and tokens_tensor.numel():
             totals["tokens"] += float(tokens_tensor.float().mean().detach().cpu())
+        telemetry = logs.get("compression_telemetry")
+        if isinstance(telemetry, CompressionTelemetry):
+            for field, value in telemetry.field_budgets.items():
+                field_budget_totals[str(field)] += float(value)
+            for field, value in telemetry.allocation_weights.items():
+                allocation_weight_totals[str(field)] += float(value)
         steps += 1
     if steps == 0:
-        return {key: 0.0 for key in totals}
-    return {key: value / steps for key, value in totals.items()}
+        result = {key: 0.0 for key in totals}
+        result["field_budgets"] = {}
+        result["allocation_weights"] = {}
+        return result
+    averages: Dict[str, Any] = {key: value / steps for key, value in totals.items()}
+    averages["field_budgets"] = {
+        field: total / steps for field, total in field_budget_totals.items()
+    }
+    averages["allocation_weights"] = {
+        field: total / steps for field, total in allocation_weight_totals.items()
+    }
+    return averages
 
 
 def main(argv: Optional[Sequence[str]] = None) -> Dict[str, Any]:
@@ -120,7 +146,15 @@ def main(argv: Optional[Sequence[str]] = None) -> Dict[str, Any]:
 
     torch.manual_seed(args.seed)
 
-    model = build_invoice_model(hidden_dim=args.hidden_dim)
+    if args.scorer is not None:
+        try:
+            scorer_config: Optional[Any] = json.loads(args.scorer)
+        except json.JSONDecodeError:
+            scorer_config = args.scorer
+    else:
+        scorer_config = None
+
+    model = build_invoice_model(hidden_dim=args.hidden_dim, scorer=scorer_config)
     device = torch.device("cpu")
     model.to(device)
     dataloader = build_invoice_dataloader(
@@ -132,7 +166,7 @@ def main(argv: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    history: List[Dict[str, float]] = []
+    history: List[Dict[str, Any]] = []
     for epoch in range(1, args.epochs + 1):
         epoch_metrics = _train_epoch(
             model,
@@ -144,10 +178,21 @@ def main(argv: Optional[Sequence[str]] = None) -> Dict[str, Any]:
         )
         epoch_metrics["epoch"] = epoch
         history.append(epoch_metrics)
+        budget_summary = epoch_metrics.get("field_budgets", {})
+        weight_summary = epoch_metrics.get("allocation_weights", {})
+        budget_text = ""
+        weight_text = ""
+        if isinstance(budget_summary, Mapping) and budget_summary:
+            parts = [f"{field}:{value:.2f}" for field, value in sorted(budget_summary.items())]
+            budget_text = f" budgets=[{', '.join(parts)}]"
+        if isinstance(weight_summary, Mapping) and weight_summary:
+            parts = [f"{field}:{value:.2f}" for field, value in sorted(weight_summary.items())]
+            weight_text = f" alloc=[{', '.join(parts)}]"
         print(
             f"epoch {epoch}: loss={epoch_metrics['loss']:.4f} ce={epoch_metrics['ce']:.4f} "
             f"rate={epoch_metrics['rate']:.4f} mi_lb={epoch_metrics['mi_lb']:.4f} "
-            f"acc={epoch_metrics['accuracy']:.3f} tokens={epoch_metrics['tokens']:.3f}"
+            f"acc={epoch_metrics['accuracy']:.3f} tokens={epoch_metrics['tokens']:.3f}" \
+            f"{budget_text}{weight_text}"
         )
 
     result = {"history": history}
