@@ -98,6 +98,33 @@ class PackedFields(Mapping[str, List[Any]]):
 
         return {field: [_copy_entry(entry) for entry in entries] for field, entries in self._payloads.items()}
 
+    def with_keys(self) -> Dict[str, List[Any]]:
+        """Return payload rows merged with their corresponding key columns."""
+
+        combined: Dict[str, List[Any]] = {}
+        key_rows = self._key_rows
+        for field, entries in self._payloads.items():
+            merged_entries: List[Any] = []
+            for idx, entry in enumerate(entries):
+                merged_entries.append(self._merge_entry_with_keys(entry, key_rows, idx))
+            combined[field] = merged_entries
+        return combined
+
+    @staticmethod
+    def _merge_entry_with_keys(entry: Any, key_rows: Sequence[Dict[Any, Any]], index: int) -> Any:
+        payload = _copy_entry(entry)
+        if index >= len(key_rows):
+            return payload
+        key_row = key_rows[index]
+        if not key_row:
+            return payload
+        merged = dict(key_row)
+        if isinstance(payload, Mapping):
+            merged.update(payload)
+            return merged
+        merged["value"] = payload
+        return merged
+
     def __repr__(self) -> str:
         return f"PackedFields(fields={list(self._payloads)}, keys={self._key_order})"
 

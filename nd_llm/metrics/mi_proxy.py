@@ -77,26 +77,45 @@ class MIProxy(nn.Module):
         if not isinstance(y_repr, torch.Tensor):
             y_repr = torch.as_tensor(y_repr)
 
-        if z.dim() == 2:
-            pooled = z
-        elif z.dim() == 3:
-            pooled = z.mean(dim=1)
-        else:
-            raise ValueError("z must have shape (batch, dim) or (batch, tokens, dim)")
-
-        if pooled.size(0) != y_repr.size(0):
-            raise ValueError("batch dimension mismatch between z and y_repr")
-
         param = next(self.parameters(), None)
         if param is None:  # pragma: no cover - module always has parameters
-            device = pooled.device
-            dtype = pooled.dtype
+            device = z.device
+            dtype = z.dtype
         else:
             device = param.device
             dtype = param.dtype
 
-        pooled = pooled.to(device=device, dtype=dtype, copy=False)
-        targets = y_repr.to(device=device, dtype=dtype, copy=False)
+        z = z.to(device=device, dtype=dtype, copy=False)
+        y_repr = y_repr.to(device=device, dtype=dtype, copy=False)
+
+        def _zero_output(batch: int, targets: int) -> Tuple[Tensor, Tensor]:
+            logits = torch.zeros((batch, targets), device=device, dtype=dtype)
+            zero = torch.zeros((), device=device, dtype=dtype, requires_grad=True)
+            return zero, logits
+
+        if z.dim() in (2, 3):
+            batch_size = z.size(0)
+        else:
+            raise ValueError("z must have shape (batch, dim) or (batch, tokens, dim)")
+
+        target_batch = y_repr.size(0)
+        if batch_size != target_batch:
+            raise ValueError("batch dimension mismatch between z and y_repr")
+
+        if batch_size == 0:
+            return _zero_output(batch_size, target_batch)
+
+        if z.dim() == 3:
+            if z.size(1) == 0:
+                return _zero_output(batch_size, target_batch)
+            pooled = z.mean(dim=1)
+        else:
+            pooled = z
+
+        if pooled.size(0) == 0:
+            return _zero_output(pooled.size(0), target_batch)
+
+        targets = y_repr
 
         pooled = F.normalize(self.f(pooled), dim=-1)
         target = F.normalize(self.h(targets), dim=-1)
