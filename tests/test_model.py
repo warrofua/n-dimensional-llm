@@ -64,3 +64,47 @@ def test_nd_encoder_decoder_emits_compression_telemetry() -> None:
     selected_metadata = logs.get("selected_metadata")
     assert isinstance(selected_metadata, list)
     assert len(selected_metadata) == len(doc_ids)
+
+
+def test_canonical_cell_aggregator_preserves_all_tokens() -> None:
+    torch.manual_seed(0)
+    model = NDEncoderDecoder(hidden_dim=16, num_classes=2)
+    text_encoder = TextEncoder(embedding_dim=8)
+    layout_encoder = LayoutEncoder(embedding_dim=6)
+
+    model.register_field(
+        "text",
+        encoder=text_encoder,
+        keys=["doc_id", "span_id"],
+        value_key="text",
+    )
+    model.register_field(
+        "layout",
+        encoder=layout_encoder,
+        keys=["doc_id", "span_id"],
+    )
+
+    fields = {
+        "text": [
+            {"doc_id": 0, "span_id": 0, "text": "alpha"},
+            {"doc_id": 0, "span_id": 1, "text": "beta"},
+            {"doc_id": 1, "span_id": 0, "text": "gamma"},
+            {"doc_id": 1, "span_id": 1, "text": "delta"},
+        ],
+        "layout": [
+            {"doc_id": 0, "span_id": 0, "xyxy": (0.0, 0.0, 1.0, 1.0)},
+            {"doc_id": 0, "span_id": 1, "xyxy": (0.1, 0.1, 1.1, 1.1)},
+            {"doc_id": 1, "span_id": 0, "xyxy": (1.0, 1.0, 2.0, 2.0)},
+            {"doc_id": 1, "span_id": 1, "xyxy": (1.1, 1.1, 2.1, 2.1)},
+        ],
+    }
+    doc_ids = [0, 1]
+
+    aggregated = model.aggregator.aggregate(fields, doc_ids=doc_ids)
+
+    assert aggregated.tokens.shape[0] == len(doc_ids)
+    assert aggregated.mask.shape == aggregated.tokens.shape[:2]
+    assert aggregated.token_counts == [4, 4]
+    for doc_value, metadata in zip(aggregated.doc_values, aggregated.metadata):
+        assert doc_value in (0, 1)
+        assert len(metadata) == 4
