@@ -1,4 +1,5 @@
 """Data models and registry utilities for ND-LLM field schemas."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -9,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 from nd_llm.encoders import Encoder
 
 try:  # pragma: no cover - import shim for optional dependency
-    import yaml as _pyyaml  # type: ignore[import-not-found]
+    import yaml as _pyyaml  # type: ignore[import-not-found,import-untyped]
 except ModuleNotFoundError:  # pragma: no cover - dependency injection point
     _pyyaml = None  # type: ignore[assignment]
 
@@ -107,7 +108,9 @@ def _prepare_lines(text: str) -> List[tuple[int, str]]:
     return lines
 
 
-def _parse_block(lines: List[tuple[int, str]], index: int, indent: int) -> tuple[Any, int]:
+def _parse_block(
+    lines: List[tuple[int, str]], index: int, indent: int
+) -> tuple[Any, int]:
     if index >= len(lines):
         return None, index
     indent_level, content = lines[index]
@@ -161,7 +164,9 @@ def _fallback_safe_load(stream: Any) -> Any:
     value, index = _parse_block(lines, 0, lines[0][0])
     if index < len(lines):
         remaining = lines[index:]
-        raise ValueError(f"Unable to parse YAML fallback beyond line {index}: {remaining!r}")
+        raise ValueError(
+            f"Unable to parse YAML fallback beyond line {index}: {remaining!r}"
+        )
     return value
 
 
@@ -175,7 +180,7 @@ def _format_scalar(value: Any) -> str:
     text = str(value)
     if text == "":
         return "''"
-    if any(ch in text for ch in "{}[],:#" ) or text.strip() != text or " " in text:
+    if any(ch in text for ch in "{}[],:#") or text.strip() != text or " " in text:
         return repr(text)
     return text
 
@@ -184,9 +189,12 @@ def _dump_block(value: Any, indent: int, sort_keys: bool) -> List[str]:
     prefix = " " * indent
     if isinstance(value, dict):
         lines: List[str] = []
-        items = value.items()
+        unordered_items = value.items()
+        items: Iterable[tuple[Any, Any]]
         if sort_keys:
-            items = sorted(items)
+            items = sorted(unordered_items)
+        else:
+            items = unordered_items
         for key, item in items:
             key_text = _format_scalar(key)
             if isinstance(item, (dict, list)):
@@ -230,7 +238,9 @@ class FieldSpec:
     def __post_init__(self) -> None:
         self.keys = list(dict.fromkeys(self.keys))  # deduplicate while preserving order
         if not all(isinstance(k, str) and k for k in self.keys):
-            raise ValueError(f"Field '{self.name}' has invalid key entries: {self.keys!r}")
+            raise ValueError(
+                f"Field '{self.name}' has invalid key entries: {self.keys!r}"
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {"keys": list(self.keys)}
@@ -266,7 +276,10 @@ class AffinityRule:
             raise ValueError(f"Affinity rule has invalid key entries: {self.keys!r}")
 
     def to_dict(self) -> Dict[str, Any]:
-        data: Dict[str, Any] = {"fields": [self.source, self.target], "by": list(self.keys)}
+        data: Dict[str, Any] = {
+            "fields": [self.source, self.target],
+            "by": list(self.keys),
+        }
         if self.metadata:
             data.update(self.metadata)
         return data
@@ -278,15 +291,24 @@ class AffinityRule:
             if not isinstance(fields, Sequence) or len(fields) != 2:
                 raise ValueError("Affinity mapping must contain exactly two fields")
             source, target = fields
-            keys = raw.get("by")
-            if keys is None:
+            by_keys = raw.get("by")
+            if by_keys is None:
                 raise ValueError("Affinity mapping missing 'by' key list")
-            metadata = {k: v for k, v in raw.items() if k not in {"fields", "by"}}
-            return cls(source=str(source), target=str(target), keys=list(keys), metadata=metadata)
+            mapping_metadata = {
+                k: v for k, v in raw.items() if k not in {"fields", "by"}
+            }
+            return cls(
+                source=str(source),
+                target=str(target),
+                keys=list(by_keys),
+                metadata=mapping_metadata,
+            )
 
         if isinstance(raw, Sequence):
             if len(raw) < 3:
-                raise ValueError("Affinity sequence must include fields and key mapping")
+                raise ValueError(
+                    "Affinity sequence must include fields and key mapping"
+                )
             source = str(raw[0])
             target = str(raw[1])
             keys: Optional[Iterable[str]] = None
@@ -312,7 +334,9 @@ class Registry:
 
     fields: Dict[str, FieldSpec] = field(default_factory=dict)
     affinities: List[AffinityRule] = field(default_factory=list)
-    _encoders: Dict[str, Encoder] = field(default_factory=dict, init=False, repr=False, compare=False)
+    _encoders: Dict[str, Encoder] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def add_field(
         self,
@@ -326,7 +350,9 @@ class Registry:
             raise ValueError(f"Field '{name}' is already registered")
         if salience is None:
             salience = bool(metadata.pop("salience", False))
-        spec = FieldSpec(name=name, keys=list(keys), salience=bool(salience), metadata=metadata)
+        spec = FieldSpec(
+            name=name, keys=list(keys), salience=bool(salience), metadata=metadata
+        )
         self.fields[name] = spec
         return spec
 
@@ -340,7 +366,9 @@ class Registry:
     ) -> AffinityRule:
         self._ensure_field_exists(source)
         self._ensure_field_exists(target)
-        rule = AffinityRule(source=source, target=target, keys=list(keys), metadata=metadata)
+        rule = AffinityRule(
+            source=source, target=target, keys=list(keys), metadata=metadata
+        )
         self._validate_affinity_keys(rule)
         self.affinities.append(rule)
         return rule
@@ -348,7 +376,9 @@ class Registry:
     def validate(self) -> None:
         for name, field_spec in self.fields.items():
             if not field_spec.keys:
-                raise ValueError(f"Field '{name}' must declare at least one alignment key")
+                raise ValueError(
+                    f"Field '{name}' must declare at least one alignment key"
+                )
         for rule in self.affinities:
             self._validate_affinity_keys(rule)
 
@@ -430,7 +460,9 @@ class Registry:
 
         if isinstance(source, (str, Path)):
             path = Path(source)
-            if isinstance(source, str) and ("\n" in source or ":" in source or source.strip().startswith("{")):
+            if isinstance(source, str) and (
+                "\n" in source or ":" in source or source.strip().startswith("{")
+            ):
                 return yaml.safe_load(source)  # type: ignore[union-attr]
             if path.exists():
                 return yaml.safe_load(path.read_text())  # type: ignore[union-attr]
