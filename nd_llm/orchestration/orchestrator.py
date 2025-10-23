@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import uuid
 from collections.abc import Sequence as SequenceABC
@@ -125,6 +126,131 @@ class BudgetMetaModel:
     ) -> float:
         raise NotImplementedError
 
+
+class HeuristicBudgetMetaModel(BudgetMetaModel):
+    """Heuristic scorer combining mutual information and utilisation signals."""
+
+    name = "heuristic-budget-v0"
+
+    def __init__(
+        self,
+        *,
+        information_weight: float = 0.6,
+        field_weight: float = 0.3,
+        utilisation_weight: float = 0.5,
+        pressure_weight: float = 1.2,
+        diversity_weight: float = 0.05,
+        history_weight: float = 0.1,
+        min_balance: float = 0.2,
+    ) -> None:
+        self.information_weight = float(information_weight)
+        self.field_weight = float(field_weight)
+        self.utilisation_weight = float(utilisation_weight)
+        self.pressure_weight = float(pressure_weight)
+        self.diversity_weight = float(diversity_weight)
+        self.history_weight = float(history_weight)
+        self.min_balance = float(min_balance)
+
+    def score_candidate(
+        self,
+        candidate: BudgetCandidate,
+        *,
+        history: Sequence["CompressionRecord"],
+        observations: Sequence[BudgetObservation],
+        features: Mapping[str, Any],
+    ) -> float:
+        features = features or {}
+
+        info_mean = self._coerce_float(features.get("mean_information_bound", 0.0))
+        info_max = self._coerce_float(features.get("max_information_bound", info_mean))
+        info_score = (info_mean + info_max) / 2.0 if info_max else info_mean
+
+        field_information = self._normalise_mapping(features.get("field_information", {}))
+        candidate_field_info = {}
+        metadata_field_info = None
+        if isinstance(candidate.metadata, Mapping):
+            metadata_field_info = candidate.metadata.get("field_information")
+        if isinstance(metadata_field_info, Mapping):
+            candidate_field_info = self._normalise_mapping(metadata_field_info)
+
+        field_scores: List[float] = []
+        for field in candidate.fields:
+            value = candidate_field_info.get(field)
+            if value is None:
+                value = field_information.get(field)
+            if value is None and info_mean:
+                value = info_mean
+            if value is not None:
+                field_scores.append(self._coerce_float(value))
+        field_score = sum(field_scores) / len(field_scores) if field_scores else info_score
+
+        utilisation_samples: List[float] = []
+        for observation in observations:
+            if observation.tokens_total > 0:
+                utilisation_samples.append(
+                    float(observation.tokens_retained) / float(observation.tokens_total)
+                )
+            elif observation.compression_ratio:
+                utilisation_samples.append(float(observation.compression_ratio))
+        if not utilisation_samples:
+            mean_ratio = self._coerce_float(features.get("mean_compression_ratio", 0.0))
+            if mean_ratio:
+                utilisation_samples.append(mean_ratio)
+        utilisation = sum(utilisation_samples) / len(utilisation_samples) if utilisation_samples else 0.0
+
+        tokens_retained_mean = self._coerce_float(features.get("mean_tokens_retained", 0.0))
+        budget_mean = self._coerce_float(features.get("budget_mean", 0.0))
+        estimated_need = tokens_retained_mean or budget_mean
+        if not estimated_need:
+            for observation in observations:
+                estimated_need = max(estimated_need, float(observation.tokens_retained))
+        if not estimated_need:
+            estimated_need = float(candidate.budget)
+
+        difference_ratio = 0.0
+        if estimated_need > 0:
+            difference_ratio = abs(float(candidate.budget) - estimated_need) / max(estimated_need, 1.0)
+        balance = 1.0 - min(difference_ratio, 1.0)
+        balance = max(self.min_balance, balance)
+
+        info_strength = self.information_weight * info_score
+        field_strength = self.field_weight * field_score
+        utilisation_strength = self.utilisation_weight * utilisation
+
+        history_factor = 1.0 + self.history_weight * (min(len(history), 10) / 10.0)
+        diversity_factor = 1.0
+        if candidate.fields:
+            diversity_factor += self.diversity_weight * math.log1p(len(candidate.fields))
+
+        pressure = max(0.0, utilisation - 0.75)
+        pressure_factor = 1.0 + self.pressure_weight * pressure
+
+        score_core = info_strength + field_strength + utilisation_strength
+        if score_core <= 0:
+            score_core = utilisation_strength + len(history) * 0.05 + len(candidate.fields) * 0.01
+
+        budget = max(float(candidate.budget), 1e-3)
+
+        score = score_core * history_factor * diversity_factor * pressure_factor * balance * budget
+        return float(score)
+
+    @staticmethod
+    def _coerce_float(value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _normalise_mapping(self, value: Any) -> Dict[str, float]:
+        if not isinstance(value, Mapping):
+            return {}
+        result: Dict[str, float] = {}
+        for key, raw in value.items():
+            try:
+                result[str(key)] = float(raw)
+            except (TypeError, ValueError):
+                continue
+        return result
 
 @dataclass
 class CompressionRecord:
@@ -664,10 +790,14 @@ class Orchestrator:
         config: OrchestratorConfig,
         bottleneck: Optional["IBottleneck"] = None,
         meta_model: Optional[BudgetMetaModel] = None,
+        *,
+        auto_attach_meta_model: bool = True,
     ) -> None:
         self._stm = stm
         self._config = config
         self._bottleneck = bottleneck
+        if meta_model is None and auto_attach_meta_model:
+            meta_model = HeuristicBudgetMetaModel()
         self._meta_model = meta_model
         self._usage_log: List[str] = []
         self._budget_history: List[BudgetDecision] = []
@@ -688,6 +818,7 @@ class Orchestrator:
         index_filename: str = "index.json",
         bottleneck: Optional["IBottleneck"] = None,
         meta_model: Optional[BudgetMetaModel] = None,
+        auto_attach_meta_model: bool = True,
     ) -> "Orchestrator":
         """Construct an orchestrator from primitive components."""
 
@@ -704,7 +835,13 @@ class Orchestrator:
             budget_step=budget_step,
             retention_probe_sample_size=retention_probe_sample_size,
         )
-        return cls(stm=stm, config=config, bottleneck=bottleneck, meta_model=meta_model)
+        return cls(
+            stm=stm,
+            config=config,
+            bottleneck=bottleneck,
+            meta_model=meta_model,
+            auto_attach_meta_model=auto_attach_meta_model,
+        )
 
     @property
     def config(self) -> OrchestratorConfig:
@@ -1076,6 +1213,9 @@ class Orchestrator:
             "issues": issues,
         }
 
+        meta_context = self._resolve_meta_model_probe_context()
+        result["meta_model"] = meta_context
+
         self._append_probe_outcome(
             {
                 "type": "retention_probe",
@@ -1083,6 +1223,7 @@ class Orchestrator:
                 "summary": reconstruction_summary,
                 "issues": issues,
                 "sampled_keys": probe_entries,
+                "meta_model": meta_context,
             }
         )
 
@@ -1123,7 +1264,6 @@ class Orchestrator:
         )
 
         meta_model = self._meta_model
-        model_name = getattr(meta_model, "name", meta_model.__class__.__name__) if meta_model else None
         if meta_model:
             history_records = [record for _, record, _ in snapshots]
             try:
@@ -1146,10 +1286,14 @@ class Orchestrator:
             "score": score,
             "history_window": len(snapshots),
             "timestamp": timestamp,
-            "meta_model": model_name,
             "features": features,
             "sample_keys": [key for key, _, _ in snapshots],
         }
+
+        meta_context = self._resolve_meta_model_probe_context(
+            candidate=candidate, score=score
+        )
+        result["meta_model"] = meta_context
 
         if include_adversarial:
             result["adversarial_samples"] = self.generate_adversarial_samples(
@@ -1164,7 +1308,7 @@ class Orchestrator:
                 "timestamp": timestamp,
                 "candidate": result["candidate"],
                 "score": score,
-                "meta_model": model_name,
+                "meta_model": meta_context,
             }
         )
 
@@ -1231,6 +1375,51 @@ class Orchestrator:
         self._recent_probe_outcomes.append(payload)
         if self._probe_history_limit > 0 and len(self._recent_probe_outcomes) > self._probe_history_limit:
             self._recent_probe_outcomes = self._recent_probe_outcomes[-self._probe_history_limit :]
+
+    def _resolve_meta_model_probe_context(
+        self,
+        *,
+        candidate: Optional[BudgetCandidate] = None,
+        score: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        meta_model = self._meta_model
+        model_name = (
+            getattr(meta_model, "name", meta_model.__class__.__name__)
+            if meta_model
+            else None
+        )
+
+        summary: Optional[Mapping[str, Any]] = None
+        if self._budget_history:
+            latest = self._budget_history[-1].metadata.get("meta_model")
+            if isinstance(latest, Mapping):
+                summary = latest
+        if summary is None and self._last_policy_metadata:
+            fallback = self._last_policy_metadata.get("meta_model")
+            if isinstance(fallback, Mapping):
+                summary = fallback
+
+        if summary is None and model_name is None:
+            return None
+
+        context: Dict[str, Any] = {}
+        if model_name is not None:
+            context["model"] = model_name
+
+        if summary is not None:
+            selected = summary.get("selected")
+            if isinstance(selected, Mapping):
+                context["selected"] = {
+                    "candidate": _to_serialisable(selected.get("candidate")),
+                    "score": selected.get("score"),
+                }
+
+        if candidate is not None:
+            context["candidate"] = candidate.as_dict()
+        if score is not None:
+            context["score"] = float(score)
+
+        return context or None
 
     def _collect_record_snapshots(self, *, window: Optional[int]) -> List[Snapshot]:
         if window is None:
@@ -1458,6 +1647,7 @@ class Orchestrator:
 __all__ = [
     "BudgetCandidate",
     "BudgetMetaModel",
+    "HeuristicBudgetMetaModel",
     "CompressionRecord",
     "Orchestrator",
     "UsageEvent",

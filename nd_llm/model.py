@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from nd_llm.bottleneck import CompressionResult, CompressionTelemetry, IBottleneck
 from nd_llm.encoders import Encoder
 from nd_llm.registry import Registry
 from nd_llm.utils import PackedFields
@@ -70,9 +71,37 @@ class CanonicalCellAggregator:
         *,
         doc_ids: Optional[Sequence[Any]] = None,
     ) -> _AggregatedBatch:
-        if not fields:
-            raise ValueError("fields mapping must not be empty")
         device = self._resolve_device()
+        if not fields:
+            if doc_ids is None:
+                empty_tokens = torch.zeros(0, 0, self._hidden_dim, device=device)
+                empty_mask = torch.zeros(0, 0, dtype=torch.bool, device=device)
+                return _AggregatedBatch(
+                    tokens=empty_tokens,
+                    mask=empty_mask,
+                    metadata=[],
+                    doc_order=[],
+                    doc_values=[],
+                    token_counts=[],
+                )
+            doc_order: List[str] = []
+            doc_values: List[Any] = []
+            for raw in doc_ids:
+                normalised = _normalise_identifier(raw)
+                doc_order.append(normalised)
+                doc_values.append(raw)
+            tokens = torch.zeros(len(doc_order), 0, self._hidden_dim, device=device)
+            mask = torch.zeros(len(doc_order), 0, dtype=torch.bool, device=device)
+            metadata: List[List[Mapping[str, Any]]] = [[] for _ in doc_order]
+            token_counts = [0 for _ in doc_order]
+            return _AggregatedBatch(
+                tokens=tokens,
+                mask=mask,
+                metadata=metadata,
+                doc_order=doc_order,
+                doc_values=doc_values,
+                token_counts=token_counts,
+            )
         per_doc: Dict[str, List[Tuple[Tensor, Mapping[str, Any]]]] = defaultdict(list)
         doc_lookup: Dict[str, Any] = {}
 
@@ -350,7 +379,7 @@ class NDEncoderDecoder(nn.Module):
         *,
         hidden_dim: int = 128,
         num_classes: int = 2,
-        bottleneck: Optional[TokenBottleneck] = None,
+        bottleneck: Optional[IBottleneck] = None,
         decoder: Optional[nn.Module] = None,
         mi_proxy: Optional[MIProxy] = None,
     ) -> None:
@@ -366,7 +395,9 @@ class NDEncoderDecoder(nn.Module):
             value_keys=self._value_keys,
             hidden_dim=self.hidden_dim,
         )
-        self.bottleneck = bottleneck or TokenBottleneck(self.hidden_dim)
+        if bottleneck is None:
+            bottleneck = IBottleneck(target_budget=1)
+        self.bottleneck = bottleneck
         self.decoder = decoder or DecoderStub(self.hidden_dim, self.num_classes)
         self.mi = mi_proxy or MIProxy(self.hidden_dim)
         self._target_projector = nn.Sequential(
@@ -412,7 +443,7 @@ class NDEncoderDecoder(nn.Module):
         token_budget: int,
         context: Optional[Mapping[str, Any]] = None,
     ) -> Tuple[Tensor, Dict[str, Any]]:
-        del context
+        context_mapping = dict(context or {})
         raw_fields = batch.get("fields", batch)
         field_mapping = self._normalise_fields(raw_fields)
         doc_ids = batch.get("doc_ids")
@@ -451,59 +482,178 @@ class NDEncoderDecoder(nn.Module):
         else:
             target_repr = None
 
-        selected_tokens, indices, scores, selected_mask = self.bottleneck(
-            tokens, budget=token_budget, mask=mask
-        )
-        if indices.numel():
-            selected_scores = torch.gather(scores, 1, indices)
-            if selected_mask is not None:
-                selected_scores = torch.where(
-                    selected_mask, selected_scores, torch.full_like(selected_scores, float("-inf"))
-                )
+        compression_result: Optional[CompressionResult] = None
+        telemetry: Optional[CompressionTelemetry]
+        compression_metrics: Dict[str, float] = {}
+        compression_loss_terms: Dict[str, Any] = {}
+        budget_value = int(token_budget)
+        has_fields = bool(field_mapping)
+        if has_fields and budget_value > 0:
+            self.bottleneck.target_budget = max(1, budget_value)
+            compression_result = self.bottleneck.compress(
+                field_mapping,
+                self.registry.encoders,
+                registry=self.registry,
+                field_specs=self.registry.fields,
+                context=context_mapping,
+            )
+            telemetry = compression_result.telemetry
+            compression_metrics = {str(k): float(v) for k, v in compression_result.metrics.items()}
+            compression_loss_terms = dict(compression_result.loss_terms)
         else:
-            selected_scores = scores.new_zeros(scores.size(0), 0)
+            telemetry = None
 
-        logits = self.decoder(selected_tokens, selected_mask)
+        (
+            selected_tokens,
+            selected_mask,
+            selected_metadata,
+            token_indices,
+            token_scores,
+        ) = self._gather_selected_tokens(tokens, mask, metadata, telemetry)
+
+        logits = self.decoder(selected_tokens, selected_mask if selected_mask.numel() else None)
 
         mi_lb_tensor, _ = self.mi(selected_tokens, target_repr)
-        tokens_selected = selected_mask.sum(dim=1) if selected_mask.numel() else torch.zeros(
-            tokens.size(0), device=tokens.device
+        tokens_selected = (
+            selected_mask.sum(dim=1)
+            if selected_mask.numel()
+            else torch.zeros(tokens.size(0), device=tokens.device)
         )
-        tokens_available = mask.sum(dim=1) if mask.numel() else torch.zeros(
-            tokens.size(0), device=tokens.device
+        tokens_available = (
+            mask.sum(dim=1) if mask.numel() else torch.zeros(tokens.size(0), device=tokens.device)
         )
-
-        selected_metadata: List[List[Mapping[str, Any]]] = []
-        for doc_idx, doc_indices in enumerate(indices.tolist() if indices.numel() else []):
-            doc_meta = metadata[doc_idx] if doc_idx < len(metadata) else []
-            doc_selected: List[Mapping[str, Any]] = []
-            for pos, cell_index in enumerate(doc_indices):
-                if selected_mask[doc_idx, pos] if selected_mask.numel() else False:
-                    if cell_index < len(doc_meta):
-                        doc_selected.append(doc_meta[cell_index])
-            selected_metadata.append(doc_selected)
-        if not selected_metadata and indices.size(0):
-            selected_metadata = [[] for _ in range(indices.size(0))]
 
         logs: Dict[str, Any] = {
             "mi_lb": float(mi_lb_tensor.detach().cpu()),
             "mi_lb_tensor": mi_lb_tensor,
             "tokens_selected": tokens_selected.detach(),
             "tokens_available": tokens_available.detach(),
-            "token_indices": indices.detach(),
-            "token_scores": selected_scores.detach(),
+            "token_indices": token_indices.detach(),
+            "token_scores": token_scores.detach(),
             "token_mask": selected_mask.detach(),
             "doc_ids": doc_values,
             "doc_order": doc_order,
             "cell_mask": mask.detach(),
             "cell_metadata": metadata,
             "selected_metadata": selected_metadata,
+            "compression_metrics": compression_metrics,
+            "compression_telemetry": telemetry,
+            "compression_loss_terms": compression_loss_terms,
         }
+        if compression_result is not None:
+            logs["compressed_fields"] = compression_result.compressed_fields
         if targets_tensor is not None:
             logs["targets"] = targets_tensor.detach()
         if target_repr is not None:
             logs["target_repr"] = target_repr.detach()
         return logits, logs
+
+    def _gather_selected_tokens(
+        self,
+        tokens: Tensor,
+        mask: Tensor,
+        metadata: Sequence[Sequence[Mapping[str, Any]]],
+        telemetry: Optional[CompressionTelemetry],
+    ) -> Tuple[Tensor, Tensor, List[List[Mapping[str, Any]]], Tensor, Tensor]:
+        batch_size = tokens.size(0)
+        device = tokens.device
+        hidden_dim = tokens.size(2) if tokens.ndim == 3 else self.hidden_dim
+        if batch_size == 0:
+            empty_tokens = tokens.new_zeros((0, 0, hidden_dim))
+            empty_mask = torch.zeros(0, 0, dtype=torch.bool, device=device)
+            empty_indices = torch.zeros(0, 0, dtype=torch.long, device=device)
+            empty_scores = tokens.new_zeros((0, 0))
+            return empty_tokens, empty_mask, [], empty_indices, empty_scores
+
+        if telemetry is None or not any(len(v) for v in telemetry.selected_indices.values()):
+            empty_tokens = tokens.new_zeros((batch_size, 0, hidden_dim))
+            empty_mask = torch.zeros(batch_size, 0, dtype=torch.bool, device=device)
+            empty_indices = torch.zeros(batch_size, 0, dtype=torch.long, device=device)
+            empty_scores = tokens.new_zeros((batch_size, 0))
+            empty_metadata: List[List[Mapping[str, Any]]] = [[] for _ in range(batch_size)]
+            return empty_tokens, empty_mask, empty_metadata, empty_indices, empty_scores
+
+        selected_lookup: Dict[str, set[int]] = {}
+        for field, indices in telemetry.selected_indices.items():
+            selected_lookup[str(field)] = {int(idx) for idx in indices}
+
+        score_lookup: Dict[str, Dict[int, float]] = {}
+        for field, scores in telemetry.selected_scores.items():
+            key = str(field)
+            field_indices = telemetry.selected_indices.get(field, [])
+            score_lookup[key] = {
+                int(idx): float(score) for idx, score in zip(field_indices, scores)
+            }
+
+        doc_selected_embeddings: List[List[Tensor]] = []
+        doc_selected_metadata: List[List[Mapping[str, Any]]] = []
+        doc_selected_indices: List[List[int]] = []
+        doc_selected_scores: List[List[float]] = []
+
+        for doc_idx in range(batch_size):
+            doc_meta_seq = list(metadata[doc_idx]) if doc_idx < len(metadata) else []
+            row_embeddings: List[Tensor] = []
+            row_metadata: List[Mapping[str, Any]] = []
+            row_indices: List[int] = []
+            row_scores: List[float] = []
+            mask_row: Optional[Tensor]
+            if mask.size(0) > doc_idx:
+                mask_row = mask[doc_idx]
+            else:
+                mask_row = None
+            for pos, entry in enumerate(doc_meta_seq):
+                if mask_row is not None and (mask_row.size(0) <= pos or not mask_row[pos]):
+                    continue
+                field = str(entry.get("field"))
+                if field not in selected_lookup:
+                    continue
+                try:
+                    index_val = int(entry.get("index"))
+                except (TypeError, ValueError):
+                    continue
+                if index_val not in selected_lookup[field]:
+                    continue
+                row_embeddings.append(tokens[doc_idx, pos])
+                row_metadata.append(dict(entry))
+                row_indices.append(index_val)
+                score = score_lookup.get(field, {}).get(index_val, float("-inf"))
+                row_scores.append(float(score))
+            doc_selected_embeddings.append(row_embeddings)
+            doc_selected_metadata.append(row_metadata)
+            doc_selected_indices.append(row_indices)
+            doc_selected_scores.append(row_scores)
+
+        max_selected = max((len(items) for items in doc_selected_embeddings), default=0)
+        selected_metadata = doc_selected_metadata
+
+        if max_selected == 0:
+            empty_tokens = tokens.new_zeros((batch_size, 0, hidden_dim))
+            empty_mask = torch.zeros(batch_size, 0, dtype=torch.bool, device=device)
+            empty_indices = torch.zeros(batch_size, 0, dtype=torch.long, device=device)
+            empty_scores = tokens.new_zeros((batch_size, 0))
+            return empty_tokens, empty_mask, selected_metadata, empty_indices, empty_scores
+
+        selected_tokens = tokens.new_zeros((batch_size, max_selected, hidden_dim))
+        selected_mask = torch.zeros(batch_size, max_selected, dtype=torch.bool, device=device)
+        index_tensor = torch.full((batch_size, max_selected), -1, dtype=torch.long, device=device)
+        score_tensor = tokens.new_full((batch_size, max_selected), float("-inf"))
+
+        for doc_idx in range(batch_size):
+            embeddings = doc_selected_embeddings[doc_idx]
+            count = len(embeddings)
+            if count == 0:
+                continue
+            stacked = torch.stack(embeddings, dim=0)
+            selected_tokens[doc_idx, :count] = stacked
+            selected_mask[doc_idx, :count] = True
+            index_tensor[doc_idx, :count] = torch.tensor(
+                doc_selected_indices[doc_idx], dtype=torch.long, device=device
+            )
+            score_tensor[doc_idx, :count] = torch.tensor(
+                doc_selected_scores[doc_idx], dtype=tokens.dtype, device=device
+            )
+
+        return selected_tokens, selected_mask, selected_metadata, index_tensor, score_tensor
 
     def _normalise_fields(
         self,

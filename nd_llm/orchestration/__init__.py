@@ -9,6 +9,7 @@ from .budget import (
 from .orchestrator import (
     BudgetCandidate,
     BudgetMetaModel,
+    HeuristicBudgetMetaModel,
     CompressionRecord,
     Orchestrator,
     UsageEvent,
@@ -22,6 +23,7 @@ __all__ = [
     "CompressionRecord",
     "BudgetCandidate",
     "BudgetMetaModel",
+    "HeuristicBudgetMetaModel",
     "Orchestrator",
     "UsageEvent",
 ]

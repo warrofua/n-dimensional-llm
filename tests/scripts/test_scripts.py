@@ -33,6 +33,10 @@ def test_train_script_smoke(tmp_path: Path) -> None:
     saved = json.loads(output_path.read_text())
     assert saved["history"]
     assert "loss" in history[0]
+    assert "field_budgets" in history[0]
+    assert isinstance(history[0]["field_budgets"], dict)
+    assert "allocation_weights" in history[0]
+    assert isinstance(history[0]["allocation_weights"], dict)
 
 
 def test_eval_rd_script_smoke(tmp_path: Path) -> None:
