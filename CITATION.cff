@@ -6,6 +6,6 @@ authors:
     given-names: Joshua
 date-released: 2025-01-01
 type: software
-url: "https://github.com/<you>/n-dimensional-llm"
-repository-code: "https://github.com/<you>/n-dimensional-llm"
+url: "https://github.com/warrofua/n-dimensional-llm"
+repository-code: "https://github.com/warrofua/n-dimensional-llm"
 abstract: "Grounded, multi-field language models with information-bottleneck compression and semantic tensor memory."
