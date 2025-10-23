@@ -93,9 +93,7 @@ class MIProxy(nn.Module):
             zero = torch.zeros((), device=device, dtype=dtype, requires_grad=True)
             return zero, logits
 
-        if z.dim() == 2:
-            batch_size = z.size(0)
-        elif z.dim() == 3:
+        if z.dim() in (2, 3):
             batch_size = z.size(0)
         else:
             raise ValueError("z must have shape (batch, dim) or (batch, tokens, dim)")
@@ -107,13 +105,12 @@ class MIProxy(nn.Module):
         if batch_size == 0:
             return _zero_output(batch_size, target_batch)
 
-        if z.dim() == 3 and z.size(1) == 0:
-            return _zero_output(batch_size, target_batch)
-
-        if z.dim() == 2:
-            pooled = z
-        else:
+        if z.dim() == 3:
+            if z.size(1) == 0:
+                return _zero_output(batch_size, target_batch)
             pooled = z.mean(dim=1)
+        else:
+            pooled = z
 
         if pooled.size(0) == 0:
             return _zero_output(pooled.size(0), target_batch)
