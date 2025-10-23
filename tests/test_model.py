@@ -64,3 +64,75 @@ def test_nd_encoder_decoder_emits_compression_telemetry() -> None:
     selected_metadata = logs.get("selected_metadata")
     assert isinstance(selected_metadata, list)
     assert len(selected_metadata) == len(doc_ids)
+
+
+def test_nd_encoder_decoder_handles_missing_targets() -> None:
+    torch.manual_seed(0)
+    model = NDEncoderDecoder(hidden_dim=32, num_classes=3)
+    text_encoder = TextEncoder(embedding_dim=8)
+    model.register_field(
+        "text",
+        encoder=text_encoder,
+        keys=["doc_id", "span_id"],
+        value_key="text",
+    )
+
+    fields = {
+        "text": [
+            {"doc_id": 0, "span_id": 0, "text": "alpha"},
+            {"doc_id": 1, "span_id": 0, "text": "beta"},
+        ]
+    }
+    doc_ids = [0, 1]
+    batch = {
+        "fields": fields,
+        "doc_ids": doc_ids,
+    }
+
+    logits, logs = model(batch, token_budget=2)
+
+    assert logits.shape == (len(doc_ids), model.num_classes)
+    assert "targets" not in logs
+    assert "target_repr" not in logs
+    mi_lb_tensor = logs.get("mi_lb_tensor")
+    assert isinstance(mi_lb_tensor, torch.Tensor)
+    assert mi_lb_tensor.ndim == 0
+    assert mi_lb_tensor.item() == 0.0
+    assert logs.get("mi_lb") == 0.0
+
+
+def test_nd_encoder_decoder_zero_budget_yields_zero_mi() -> None:
+    torch.manual_seed(0)
+    model = NDEncoderDecoder(hidden_dim=32, num_classes=3)
+    text_encoder = TextEncoder(embedding_dim=8)
+    model.register_field(
+        "text",
+        encoder=text_encoder,
+        keys=["doc_id", "span_id"],
+        value_key="text",
+    )
+
+    fields = {
+        "text": [
+            {"doc_id": 0, "span_id": 0, "text": "alpha"},
+            {"doc_id": 1, "span_id": 0, "text": "beta"},
+        ]
+    }
+    doc_ids = [0, 1]
+    batch = {
+        "fields": fields,
+        "doc_ids": doc_ids,
+        "targets": torch.tensor([1, 2], dtype=torch.long),
+    }
+
+    logits, logs = model(batch, token_budget=0)
+
+    assert logits.shape == (len(doc_ids), model.num_classes)
+    mi_lb_tensor = logs.get("mi_lb_tensor")
+    assert isinstance(mi_lb_tensor, torch.Tensor)
+    assert mi_lb_tensor.ndim == 0
+    assert mi_lb_tensor.item() == 0.0
+    assert logs.get("mi_lb") == 0.0
+    tokens_selected = logs.get("tokens_selected")
+    assert isinstance(tokens_selected, torch.Tensor)
+    assert tokens_selected.sum().item() == 0.0
