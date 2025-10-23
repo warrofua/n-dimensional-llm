@@ -35,6 +35,13 @@ from nd_llm.utils import (
     STMConfig,
 )
 
+from .doclaynet import (
+    build_doclaynet_encoders,
+    build_doclaynet_registry,
+    doclaynet_contains_table,
+    doclaynet_fields,
+    load_doclaynet_dataset,
+)
 from .funsd import (
     build_funsd_encoders,
     build_funsd_registry,
@@ -170,6 +177,51 @@ def run_funsd_benchmark(
 
     return {
         "dataset": "FUNSD",
+        "split": split,
+        "dataset_size": actual_size,
+        "use_sample": bool(use_sample),
+        "budgets": [run.to_dict() for run in runs],
+    }
+
+
+def run_doclaynet_benchmark(
+    budget_values: Iterable[int] = (6, 12),
+    *,
+    dataset_size: int = 6,
+    split: str = "train",
+    data_root: Optional[Path | str] = None,
+    use_sample: bool = True,
+    seed: int = 0,
+) -> Dict[str, Any]:
+    """Evaluate DocLayNet documents for table retention under budget constraints."""
+
+    registry = build_doclaynet_registry()
+    build_doclaynet_encoders(registry)
+    limit = dataset_size if dataset_size > 0 else None
+    dataset = load_doclaynet_dataset(data_root, split=split, limit=limit, use_sample=use_sample)
+    actual_size = len(dataset)
+
+    runs: List[BudgetRun] = []
+    ablations = _doclaynet_ablation_suite(seed)
+    for budget in budget_values:
+        budget_run = _evaluate_budget(
+            budget=int(budget),
+            dataset=dataset,
+            registry_encoders=registry.encoders,
+            fields_fn=doclaynet_fields,
+            label_fn=doclaynet_contains_table,
+            predict_fn=_doclaynet_predict_contains_table,
+            metadata_fn=_doclaynet_metadata,
+            policy_name="doclaynet-doc-benchmark",
+            retention_probe_sample_size=3,
+            seed=seed,
+            ablations=ablations,
+            mi_field_priorities=("layout", "text", "region"),
+        )
+        runs.append(budget_run)
+
+    return {
+        "dataset": "DocLayNet",
         "split": split,
         "dataset_size": actual_size,
         "use_sample": bool(use_sample),
@@ -559,6 +611,15 @@ def _funsd_ablation_suite(seed: int) -> Dict[str, AblationFn]:
     }
 
 
+def _doclaynet_ablation_suite(seed: int) -> Dict[str, AblationFn]:
+    return {
+        "drop_layout": _drop_field_ablation("layout"),
+        "drop_text": _drop_field_ablation("text"),
+        "perturb_layout": _perturb_layout_ablation(scale=0.03),
+        "shuffle_regions": _shuffle_field_ablation("region"),
+    }
+
+
 def _invoice_prediction_factory(threshold: float) -> PredictFn:
     def _predict(result: CompressionResult, _: Mapping[str, Any]) -> bool:
         amount_field = result.compressed_fields.get("amount", [])
@@ -884,6 +945,49 @@ def _copy_nested_list(value: Any) -> Any:
     return value
 
 
+def _doclaynet_predict_contains_table(result: CompressionResult, _: Mapping[str, Any]) -> bool:
+    for region in result.compressed_fields.get("region", []):
+        if isinstance(region, Mapping):
+            label = region.get("label") or region.get("region_label")
+        else:
+            label = region
+        if isinstance(label, str) and label.lower() == "table":
+            return True
+    for token in result.compressed_fields.get("text", []):
+        value: Any
+        if isinstance(token, Mapping):
+            value = token.get("text")
+        else:
+            value = token
+        if isinstance(value, str) and "table" in value.lower():
+            return True
+    return False
+
+
+def _doclaynet_metadata(document: Mapping[str, Any], result: CompressionResult) -> Mapping[str, Any]:
+    doc_id = document.get("doc_id") or document.get("id")
+    kept_regions = []
+    for region in result.compressed_fields.get("region", []):
+        if isinstance(region, Mapping):
+            label = region.get("label") or region.get("region_label")
+            region_id = region.get("region_id")
+        else:
+            label = region
+            region_id = None
+        kept_regions.append(
+            {
+                "region_id": region_id,
+                "label": str(label) if label is not None else "",
+            }
+        )
+    return {
+        "doc_id": doc_id,
+        "contains_table": doclaynet_contains_table(document),
+        "kept_regions": kept_regions,
+        "kept_region_count": len(kept_regions),
+    }
+
+
 def _funsd_predict_numeric_answer(result: CompressionResult, _: Mapping[str, Any]) -> bool:
     for entity in result.compressed_fields.get("entity", []):
         if isinstance(entity, Mapping) and str(entity.get("label", "")).lower() == "answer":
@@ -920,4 +1024,4 @@ if __name__ == "__main__":
     main()
 
 
-__all__ = ["run_benchmark", "run_funsd_benchmark"]
+__all__ = ["run_benchmark", "run_funsd_benchmark", "run_doclaynet_benchmark"]
