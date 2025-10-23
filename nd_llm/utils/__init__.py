@@ -10,6 +10,7 @@ from .canonical_cells import (
 )
 from .config import OrchestratorConfig, STMConfig
 from .fields import PackedFields, pack_fields
+from .mi import build_mi_proxy_context
 
 __all__ = [
     "DEFAULT_BACKEND",
@@ -22,4 +23,5 @@ __all__ = [
     "STMConfig",
     "pack_fields",
     "rasterize_cells",
+    "build_mi_proxy_context",
 ]

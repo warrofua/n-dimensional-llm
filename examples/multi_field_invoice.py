@@ -19,6 +19,7 @@ from nd_llm.stm import STM
 from nd_llm.utils import (
     DEFAULT_BACKEND,
     aggregate_fields,
+    build_mi_proxy_context,
     rasterize_cells,
     OrchestratorConfig,
     STMConfig,
@@ -57,7 +58,17 @@ def run_demo(
     cell_fusion = _fuse_invoice_cells(fields, encoders)
 
     bottleneck = IBottleneck(target_budget=budget)
-    compression = bottleneck.compress(fields, encoders=registry.encoders)
+    mi_proxy, mi_context = build_mi_proxy_context(
+        fields,
+        registry.encoders,
+        preferred_fields=("text", "layout", "amount"),
+    )
+    compression = bottleneck.compress(
+        fields,
+        encoders=registry.encoders,
+        context=mi_context,
+        mi_proxy=mi_proxy,
+    )
     reconstructed = bottleneck.decompress(compression)
 
     def _execute(storage_path: Path) -> Dict[str, Any]:
