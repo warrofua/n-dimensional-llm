@@ -1,17 +1,31 @@
 """Data models and registry utilities for ND-LLM field schemas."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib import import_module
+from types import ModuleType
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Union,
+    cast,
+)
 
 from nd_llm.encoders import Encoder
 
+_pyyaml: ModuleType | None
 try:  # pragma: no cover - import shim for optional dependency
-    import yaml as _pyyaml  # type: ignore[import-not-found]
+    _pyyaml = import_module("yaml")
 except ModuleNotFoundError:  # pragma: no cover - dependency injection point
-    _pyyaml = None  # type: ignore[assignment]
+    _pyyaml = None
 
 
 def _split_flow_items(text: str) -> List[str]:
@@ -107,7 +121,9 @@ def _prepare_lines(text: str) -> List[tuple[int, str]]:
     return lines
 
 
-def _parse_block(lines: List[tuple[int, str]], index: int, indent: int) -> tuple[Any, int]:
+def _parse_block(
+    lines: List[tuple[int, str]], index: int, indent: int
+) -> tuple[Any, int]:
     if index >= len(lines):
         return None, index
     indent_level, content = lines[index]
@@ -161,7 +177,9 @@ def _fallback_safe_load(stream: Any) -> Any:
     value, index = _parse_block(lines, 0, lines[0][0])
     if index < len(lines):
         remaining = lines[index:]
-        raise ValueError(f"Unable to parse YAML fallback beyond line {index}: {remaining!r}")
+        raise ValueError(
+            f"Unable to parse YAML fallback beyond line {index}: {remaining!r}"
+        )
     return value
 
 
@@ -175,7 +193,7 @@ def _format_scalar(value: Any) -> str:
     text = str(value)
     if text == "":
         return "''"
-    if any(ch in text for ch in "{}[],:#" ) or text.strip() != text or " " in text:
+    if any(ch in text for ch in "{}[],:#") or text.strip() != text or " " in text:
         return repr(text)
     return text
 
@@ -184,9 +202,12 @@ def _dump_block(value: Any, indent: int, sort_keys: bool) -> List[str]:
     prefix = " " * indent
     if isinstance(value, dict):
         lines: List[str] = []
-        items = value.items()
+        unordered_items = value.items()
+        items: Iterable[tuple[Any, Any]]
         if sort_keys:
-            items = sorted(items)
+            items = sorted(unordered_items)
+        else:
+            items = unordered_items
         for key, item in items:
             key_text = _format_scalar(key)
             if isinstance(item, (dict, list)):
@@ -212,10 +233,30 @@ def _fallback_safe_dump(data: Any, sort_keys: bool = False) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
+class _YamlAPI(Protocol):
+    """Subset of the PyYAML API used by the registry helpers."""
+
+    def safe_load(self, stream: Any) -> Any: ...
+
+    def safe_dump(self, data: Any, **kwargs: Any) -> str: ...
+
+
+class _FallbackYaml:
+    """Drop-in object that mirrors the subset of PyYAML we rely on."""
+
+    def safe_load(self, stream: Any) -> Any:
+        return _fallback_safe_load(stream)
+
+    def safe_dump(self, data: Any, **kwargs: Any) -> str:
+        sort_keys = bool(kwargs.get("sort_keys", False))
+        return _fallback_safe_dump(data, sort_keys=sort_keys)
+
+
+yaml: _YamlAPI
 if _pyyaml is None:  # pragma: no cover - exercised in environments without PyYAML
-    yaml = SimpleNamespace(safe_load=_fallback_safe_load, safe_dump=_fallback_safe_dump)
+    yaml = _FallbackYaml()
 else:  # pragma: no cover - prefer system PyYAML when available
-    yaml = _pyyaml
+    yaml = cast(_YamlAPI, _pyyaml)
 
 
 @dataclass(slots=True)
@@ -230,7 +271,9 @@ class FieldSpec:
     def __post_init__(self) -> None:
         self.keys = list(dict.fromkeys(self.keys))  # deduplicate while preserving order
         if not all(isinstance(k, str) and k for k in self.keys):
-            raise ValueError(f"Field '{self.name}' has invalid key entries: {self.keys!r}")
+            raise ValueError(
+                f"Field '{self.name}' has invalid key entries: {self.keys!r}"
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {"keys": list(self.keys)}
@@ -266,7 +309,10 @@ class AffinityRule:
             raise ValueError(f"Affinity rule has invalid key entries: {self.keys!r}")
 
     def to_dict(self) -> Dict[str, Any]:
-        data: Dict[str, Any] = {"fields": [self.source, self.target], "by": list(self.keys)}
+        data: Dict[str, Any] = {
+            "fields": [self.source, self.target],
+            "by": list(self.keys),
+        }
         if self.metadata:
             data.update(self.metadata)
         return data
@@ -278,15 +324,24 @@ class AffinityRule:
             if not isinstance(fields, Sequence) or len(fields) != 2:
                 raise ValueError("Affinity mapping must contain exactly two fields")
             source, target = fields
-            keys = raw.get("by")
-            if keys is None:
+            by_keys = raw.get("by")
+            if by_keys is None:
                 raise ValueError("Affinity mapping missing 'by' key list")
-            metadata = {k: v for k, v in raw.items() if k not in {"fields", "by"}}
-            return cls(source=str(source), target=str(target), keys=list(keys), metadata=metadata)
+            mapping_metadata = {
+                k: v for k, v in raw.items() if k not in {"fields", "by"}
+            }
+            return cls(
+                source=str(source),
+                target=str(target),
+                keys=list(by_keys),
+                metadata=mapping_metadata,
+            )
 
         if isinstance(raw, Sequence):
             if len(raw) < 3:
-                raise ValueError("Affinity sequence must include fields and key mapping")
+                raise ValueError(
+                    "Affinity sequence must include fields and key mapping"
+                )
             source = str(raw[0])
             target = str(raw[1])
             keys: Optional[Iterable[str]] = None
@@ -312,7 +367,9 @@ class Registry:
 
     fields: Dict[str, FieldSpec] = field(default_factory=dict)
     affinities: List[AffinityRule] = field(default_factory=list)
-    _encoders: Dict[str, Encoder] = field(default_factory=dict, init=False, repr=False, compare=False)
+    _encoders: Dict[str, Encoder] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def add_field(
         self,
@@ -326,7 +383,9 @@ class Registry:
             raise ValueError(f"Field '{name}' is already registered")
         if salience is None:
             salience = bool(metadata.pop("salience", False))
-        spec = FieldSpec(name=name, keys=list(keys), salience=bool(salience), metadata=metadata)
+        spec = FieldSpec(
+            name=name, keys=list(keys), salience=bool(salience), metadata=metadata
+        )
         self.fields[name] = spec
         return spec
 
@@ -340,7 +399,9 @@ class Registry:
     ) -> AffinityRule:
         self._ensure_field_exists(source)
         self._ensure_field_exists(target)
-        rule = AffinityRule(source=source, target=target, keys=list(keys), metadata=metadata)
+        rule = AffinityRule(
+            source=source, target=target, keys=list(keys), metadata=metadata
+        )
         self._validate_affinity_keys(rule)
         self.affinities.append(rule)
         return rule
@@ -348,7 +409,9 @@ class Registry:
     def validate(self) -> None:
         for name, field_spec in self.fields.items():
             if not field_spec.keys:
-                raise ValueError(f"Field '{name}' must declare at least one alignment key")
+                raise ValueError(
+                    f"Field '{name}' must declare at least one alignment key"
+                )
         for rule in self.affinities:
             self._validate_affinity_keys(rule)
 
@@ -385,7 +448,7 @@ class Registry:
 
     def to_yaml(self) -> str:
         self._ensure_yaml_available()
-        return yaml.safe_dump(self.to_dict(), sort_keys=False)  # type: ignore[union-attr]
+        return yaml.safe_dump(self.to_dict(), sort_keys=False)
 
     @classmethod
     def from_yaml(cls, source: Union[str, Path, Any]) -> "Registry":
@@ -426,15 +489,17 @@ class Registry:
         Registry._ensure_yaml_available()
         if hasattr(source, "read"):
             content = source.read()
-            return yaml.safe_load(content)  # type: ignore[union-attr]
+            return yaml.safe_load(content)
 
         if isinstance(source, (str, Path)):
             path = Path(source)
-            if isinstance(source, str) and ("\n" in source or ":" in source or source.strip().startswith("{")):
-                return yaml.safe_load(source)  # type: ignore[union-attr]
+            if isinstance(source, str) and (
+                "\n" in source or ":" in source or source.strip().startswith("{")
+            ):
+                return yaml.safe_load(source)
             if path.exists():
-                return yaml.safe_load(path.read_text())  # type: ignore[union-attr]
-            return yaml.safe_load(str(source))  # type: ignore[union-attr]
+                return yaml.safe_load(path.read_text())
+            return yaml.safe_load(str(source))
 
         raise TypeError("Unsupported YAML source type")
 
@@ -454,5 +519,6 @@ class Registry:
         if missing_source or missing_target:
             raise ValueError(
                 "Affinity keys must be present in both fields: "
-                f"missing_from_source={missing_source}, missing_from_target={missing_target}"
+                f"missing_from_source={missing_source}, "
+                f"missing_from_target={missing_target}"
             )

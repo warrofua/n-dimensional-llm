@@ -3,27 +3,36 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Iterable, List, Mapping, MutableMapping, Sequence
+from typing import (
+    Any,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Sequence,
+    TYPE_CHECKING,
+    TypeAlias,
+)
+
+if TYPE_CHECKING:  # pragma: no cover - imported for type checking only
+    from numpy.typing import NDArray
+
+    NumpyArray: TypeAlias = NDArray[Any]
+else:
+    NumpyArray: TypeAlias = Any
 
 try:  # pragma: no cover - numpy is optional in some environments
     import numpy as _np  # type: ignore
-
-    _NUMPY_AVAILABLE = True
-    NumpyArray = _np.ndarray
 except Exception:  # pragma: no cover - fallback when numpy is missing
     _np = None  # type: ignore[assignment]
-    _NUMPY_AVAILABLE = False
-    NumpyArray = tuple()  # type: ignore[assignment]
 
 try:  # pragma: no cover - torch is optional during testing
     import torch  # type: ignore
-
-    _TORCH_AVAILABLE = True
-    TorchTensor = torch.Tensor  # type: ignore[attr-defined]
 except Exception:  # pragma: no cover - fallback when torch is missing
     torch = None  # type: ignore[assignment]
-    _TORCH_AVAILABLE = False
-    TorchTensor = tuple()  # type: ignore[assignment]
+
+_NUMPY_AVAILABLE = _np is not None
+_TORCH_AVAILABLE = torch is not None
 
 Backend = str
 
@@ -60,8 +69,8 @@ def rasterize_cells(
         ys = torch.linspace(0.0, 1.0, steps=height, device=tensor_device, dtype=tensor_dtype)
         xs = torch.linspace(0.0, 1.0, steps=width, device=tensor_device, dtype=tensor_dtype)
         grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
-        centres = torch.stack([grid_y, grid_x], dim=-1).view(1, height * width, 2)
-        return centres.repeat(batch_size, 1, 1)
+        centres_tensor = torch.stack([grid_y, grid_x], dim=-1).view(1, height * width, 2)
+        return centres_tensor.repeat(batch_size, 1, 1)
 
     if resolved_backend == "numpy":
         if not NUMPY_AVAILABLE:  # pragma: no cover - defensive
@@ -70,22 +79,22 @@ def rasterize_cells(
         ys = _np.linspace(0.0, 1.0, num=height, dtype=array_dtype)
         xs = _np.linspace(0.0, 1.0, num=width, dtype=array_dtype)
         grid_y, grid_x = _np.meshgrid(ys, xs, indexing="ij")
-        centres = _np.stack([grid_y, grid_x], axis=-1).reshape(1, height * width, 2)
+        centres_array = _np.stack([grid_y, grid_x], axis=-1).reshape(1, height * width, 2)
         if batch_size == 1:
-            return centres
-        return _np.repeat(centres, repeats=batch_size, axis=0)
+            return centres_array
+        return _np.repeat(centres_array, repeats=batch_size, axis=0)
 
     # Python fallback for environments without numpy/torch
     ys = _linspace_python(height)
     xs = _linspace_python(width)
-    centres: List[List[List[float]]] = []
+    centres_list: List[List[List[float]]] = []
     for _ in range(batch_size):
         batch_centres: List[List[float]] = []
         for row in range(height):
             for col in range(width):
                 batch_centres.append([ys[row], xs[col]])
-        centres.append(batch_centres)
-    return centres
+        centres_list.append(batch_centres)
+    return centres_list
 
 
 def assign_to_cells(
@@ -353,12 +362,15 @@ def _aggregate_python(
         elif tokens and len(tokens[0][0]) != feature_dim:
             raise ValueError("all token tensors must share the same embedding dimension")
 
+        if fused is None or totals is None or feature_dim is None:
+            continue
+
         weights = assign_to_cells(coords, centres, tau=tau, backend="python")
         for batch_index in range(batch):
             for token_index, weight_vector in enumerate(weights[batch_index]):
                 embedding = tokens[batch_index][token_index]
                 for cell_index, weight in enumerate(weight_vector):
-                    for dim in range(feature_dim or 0):
+                    for dim in range(feature_dim):
                         fused[batch_index][cell_index][dim] += weight * float(embedding[dim])
                     totals[batch_index][cell_index] += weight
 

@@ -223,10 +223,10 @@ def _resolve_size(document: Mapping[str, Any]) -> tuple[float, float]:
             return max(width, 1.0), max(height, 1.0)
     page = document.get("page_size")
     if isinstance(page, Mapping):
-        width = page.get("width") or page.get("w")
-        height = page.get("height") or page.get("h")
-        if width and height:
-            return max(float(width), 1.0), max(float(height), 1.0)
+        width_value = page.get("width") or page.get("w")
+        height_value = page.get("height") or page.get("h")
+        if width_value is not None and height_value is not None:
+            return max(float(width_value), 1.0), max(float(height_value), 1.0)
     width = float(document.get("width") or 1000)
     height = float(document.get("height") or 1000)
     return max(width, 1.0), max(height, 1.0)

@@ -1,10 +1,10 @@
+# mypy: ignore-errors
 """Command-line training harness for the NDEncoderDecoder scaffold."""
 
 from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
@@ -97,8 +97,8 @@ def _train_epoch(
         "accuracy": 0.0,
         "tokens": 0.0,
     }
-    field_budget_totals: Dict[str, float] = defaultdict(float)
-    allocation_weight_totals: Dict[str, float] = defaultdict(float)
+    field_budget_totals: Dict[str, int] = {}
+    allocation_weight_totals: Dict[str, float] = {}
     steps = 0
     for batch in dataloader:
         batch_targets = batch.get("targets")
@@ -121,18 +121,21 @@ def _train_epoch(
         telemetry = logs.get("compression_telemetry")
         if isinstance(telemetry, CompressionTelemetry):
             for field, value in telemetry.field_budgets.items():
-                field_budget_totals[str(field)] += float(value)
+                key = str(field)
+                field_budget_totals[key] = field_budget_totals.get(key, 0) + int(value)
             for field, value in telemetry.allocation_weights.items():
-                allocation_weight_totals[str(field)] += float(value)
+                key = str(field)
+                current_weight = allocation_weight_totals.get(key, 0.0)
+                allocation_weight_totals[key] = current_weight + float(value)
         steps += 1
     if steps == 0:
-        result = {key: 0.0 for key in totals}
+        result: Dict[str, Any] = {key: 0.0 for key in totals}
         result["field_budgets"] = {}
         result["allocation_weights"] = {}
         return result
     averages: Dict[str, Any] = {key: value / steps for key, value in totals.items()}
     averages["field_budgets"] = {
-        field: total / steps for field, total in field_budget_totals.items()
+        field: float(total) / steps for field, total in field_budget_totals.items()
     }
     averages["allocation_weights"] = {
         field: total / steps for field, total in allocation_weight_totals.items()

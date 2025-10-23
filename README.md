@@ -112,6 +112,10 @@ python -m venv .venv && source .venv/bin/activate
 
 # editable install
 pip install -e .
+
+# install and activate the repo's git hooks
+pip install pre-commit
+pre-commit install
 ```
 
 ### “Hello, N‑D” (pseudo‑Python)
