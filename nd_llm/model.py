@@ -479,12 +479,36 @@ class NDEncoderDecoder(nn.Module):
 
         logits = self.decoder(selected_tokens, selected_mask if selected_mask.numel() else None)
 
-        mi_lb_tensor, _ = self.mi(selected_tokens, target_repr)
-        tokens_selected = (
-            selected_mask.sum(dim=1)
-            if selected_mask.numel()
-            else torch.zeros(tokens.size(0), device=tokens.device)
-        )
+        batch_size = selected_tokens.size(0)
+        hidden_dim = selected_tokens.size(2) if selected_tokens.ndim == 3 else self.hidden_dim
+        if batch_size == 0:
+            pooled_tokens = selected_tokens.new_zeros((0, hidden_dim))
+        elif selected_tokens.size(1) == 0 or not selected_mask.numel():
+            pooled_tokens = selected_tokens.new_zeros((batch_size, hidden_dim))
+        else:
+            mask_f = selected_mask.unsqueeze(-1).float()
+            masked_tokens = selected_tokens * mask_f
+            token_totals = masked_tokens.sum(dim=1)
+            mask_totals = mask_f.sum(dim=1)
+            pooled_tokens = torch.where(
+                mask_totals > 0,
+                token_totals / mask_totals.clamp_min(1.0),
+                torch.zeros_like(token_totals),
+            )
+
+        if selected_mask.numel():
+            tokens_selected_counts = selected_mask.sum(dim=1)
+            has_any_tokens = bool(tokens_selected_counts.sum().item())
+        else:
+            tokens_selected_counts = torch.zeros(batch_size, device=selected_tokens.device)
+            has_any_tokens = False
+
+        if target_repr is not None and has_any_tokens:
+            mi_lb_tensor, _ = self.mi(pooled_tokens, target_repr)
+        else:
+            mi_lb_tensor = pooled_tokens.new_zeros((), dtype=pooled_tokens.dtype, requires_grad=True)
+
+        tokens_selected = tokens_selected_counts
         tokens_available = (
             mask.sum(dim=1) if mask.numel() else torch.zeros(tokens.size(0), device=tokens.device)
         )
