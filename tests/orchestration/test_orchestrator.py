@@ -11,8 +11,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from nd_llm.orchestration import (
-    BudgetCandidate,
-    BudgetMetaModel,
     CompressionRecord,
     CompressionRatioBudgetStrategy,
     Orchestrator,
@@ -85,23 +83,6 @@ def _make_canonical_record() -> CompressionRecord:
         metrics=metrics,
         bottleneck="ib-topk",
     )
-class DummyMetaModel(BudgetMetaModel):
-    name = "dummy-meta"
-
-    def score_candidate(
-        self,
-        candidate: BudgetCandidate,
-        *,
-        history,
-        observations,
-        features,
-    ) -> float:
-        field_bonus = sum(features.get("field_information", {}).get(field, 0.0) for field in candidate.fields)
-        info_bonus = float(features.get("mean_information_bound", 0.0) or 0.0)
-        field_count = max(len(candidate.fields), 1)
-        return (info_bonus + field_bonus + field_count) * float(candidate.budget)
-
-
 def test_orchestrator_persists_usage_event(tmp_path) -> None:
     storage_config = STMConfig(storage_dir=tmp_path)
     stm = STM(storage_config)
@@ -208,6 +189,7 @@ def test_budget_tuning_updates_target_budget(tmp_path) -> None:
             budget_step=0.25,
             retention_probe_sample_size=5,
         ),
+        auto_attach_meta_model=False,
     )
 
     high_util_record = _make_record(total_tokens=10, kept_tokens=9, budget=9)
@@ -254,7 +236,6 @@ def test_budget_tuning_updates_target_budget(tmp_path) -> None:
 def test_meta_model_guides_budget_and_proxy_trials(tmp_path) -> None:
     storage_config = STMConfig(storage_dir=tmp_path)
     stm = STM(storage_config)
-    meta_model = DummyMetaModel()
 
     orchestrator = Orchestrator(
         stm=stm,
@@ -264,7 +245,13 @@ def test_meta_model_guides_budget_and_proxy_trials(tmp_path) -> None:
             budget_step=0.5,
             retention_probe_sample_size=5,
         ),
-        meta_model=meta_model,
+    )
+
+    assert orchestrator.meta_model is not None
+    model_name = getattr(
+        orchestrator.meta_model,
+        "name",
+        orchestrator.meta_model.__class__.__name__,
     )
 
     record_text = _make_record(total_tokens=10, kept_tokens=10, budget=10, field="text", field_mi=0.6)
@@ -281,12 +268,17 @@ def test_meta_model_guides_budget_and_proxy_trials(tmp_path) -> None:
     assert tuned_budget > 2.0
     assert orchestrator.config.target_budget == pytest.approx(tuned_budget)
     assert orchestrator.budget_history[-1].reason.startswith("meta-model")
-    selected = orchestrator.budget_history[-1].metadata["meta_model"]["selected"]
+    meta_summary = orchestrator.budget_history[-1].metadata["meta_model"]
+    assert meta_summary["model"] == model_name
+    selected = meta_summary["selected"]
     assert selected["candidate"]["budget"] == pytest.approx(tuned_budget)
+    assert selected["score"] > 0
 
     proxy = orchestrator.run_proxy_trial(candidate_budget=1.25, include_adversarial=True, window=2)
     assert proxy["candidate"]["budget"] == pytest.approx(1.25)
-    assert proxy["meta_model"] == meta_model.name
+    assert proxy["meta_model"]["model"] == model_name
+    assert proxy["meta_model"]["candidate"]["budget"] == pytest.approx(1.25)
+    assert proxy["meta_model"]["score"] == pytest.approx(proxy["score"])
     assert proxy["adversarial_samples"]
 
     samples = orchestrator.generate_adversarial_samples(limit=1)
@@ -300,7 +292,10 @@ def test_meta_model_guides_budget_and_proxy_trials(tmp_path) -> None:
     index_entry = stm.get_index_entry(final_key)
     compression_meta = index_entry["metadata"]["compression"]
     assert compression_meta["policy_metadata"]["policy"] == "meta-test"
-    assert compression_meta["policy_metadata"]["decision"]["metadata"]["meta_model"]["model"] == meta_model.name
+    assert (
+        compression_meta["policy_metadata"]["decision"]["metadata"]["meta_model"]["model"]
+        == model_name
+    )
     probe_types = {entry["type"] for entry in compression_meta["probe_outcomes"]}
     assert "proxy_trial" in probe_types
 
@@ -347,3 +342,45 @@ def test_retention_probe_reports_reconstruction(tmp_path) -> None:
     assert 0.0 <= reconstruction["mean_retained_ratio"] <= 1.0
     assert reconstruction["mean_mse"] >= 0.0
     assert len(reconstruction.get("details", [])) == 2
+    assert probe["meta_model"]["model"] == getattr(
+        orchestrator.meta_model,
+        "name",
+        orchestrator.meta_model.__class__.__name__,
+    )
+
+
+def test_from_components_attaches_default_meta_model(tmp_path) -> None:
+    orchestrator = Orchestrator.from_components(
+        target_budget=2.0,
+        policy_name="component-meta",
+        budget_step=0.5,
+        retention_probe_sample_size=5,
+        storage_dir=tmp_path,
+    )
+
+    assert orchestrator.meta_model is not None
+    model_name = getattr(
+        orchestrator.meta_model,
+        "name",
+        orchestrator.meta_model.__class__.__name__,
+    )
+
+    record = _make_record(
+        total_tokens=10,
+        kept_tokens=10,
+        budget=10,
+        field="text",
+        field_mi=0.8,
+    )
+    orchestrator.log_usage_event(
+        UsageEvent(key="component-1", tensor=[0.1, 0.2], compression=record)
+    )
+
+    proposed = orchestrator.tune_budget()
+    assert proposed >= orchestrator.config.budget_step
+    decision = orchestrator.budget_history[-1]
+    assert decision.reason.startswith("meta-model")
+    meta_summary = decision.metadata["meta_model"]
+    assert meta_summary["model"] == model_name
+    assert meta_summary["selected"]["candidate"]["budget"] == pytest.approx(proposed)
+    assert meta_summary["selected"]["score"] > 0
