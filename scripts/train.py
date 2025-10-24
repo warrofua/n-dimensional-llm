@@ -5,14 +5,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+
+if __package__ is None or __package__ == "":
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 import torch
 import torch.nn.functional as F
 
 from nd_llm.bottleneck import CompressionTelemetry
-from .common import (
+from scripts.common import (
     average_accuracy,
     build_invoice_dataloader,
     build_invoice_model,
