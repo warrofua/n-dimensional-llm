@@ -1,4 +1,11 @@
-"""Synthetic doc-understanding benchmark for accuracy vs. token budget."""
+"""Synthetic doc-understanding benchmark for accuracy vs. token budget.
+
+For evaluations on the full FUNSD and DocLayNet datasets, first download the
+official releases via ``python scripts/download_datasets.py``.  Then point the
+helpers at the cache directory with ``data_root=PATH / "funsd"`` or
+``data_root=PATH / "doclaynet"`` while setting ``use_sample=False`` and
+``dataset_size=0``.
+"""
 
 from __future__ import annotations
 
