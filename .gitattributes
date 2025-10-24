@@ -1,0 +1,2 @@
+benchmarks/data/funsd_cache.jsonl filter=lfs diff=lfs merge=lfs -text
+benchmarks/data/doclaynet_cache.jsonl filter=lfs diff=lfs merge=lfs -text
