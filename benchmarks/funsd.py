@@ -9,7 +9,9 @@ from typing import Any, Dict, Iterator, List, Mapping, MutableMapping, Optional,
 from nd_llm.encoders import Encoder, LayoutEncoder, TextEncoder
 from nd_llm.registry import Registry
 
-_SAMPLE_PATH = Path(__file__).with_name("data").joinpath("funsd_sample.jsonl")
+_DATA_DIR = Path(__file__).with_name("data")
+_CACHE_PATH = _DATA_DIR.joinpath("funsd_cache.jsonl")
+_SAMPLE_PATH = _DATA_DIR.joinpath("funsd_sample.jsonl")
 
 _FUNSD_SPLITS: Dict[str, List[str]] = {
     "train": ["train", "training", "training_data"],
@@ -152,19 +154,21 @@ def funsd_numeric_answer_label(document: Mapping[str, Any]) -> bool:
 
 
 def _load_sample(limit: Optional[int]) -> Iterator[Dict[str, Any]]:
-    count = 0
-    path = _SAMPLE_PATH
-    if not path.exists():
-        return
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            document = json.loads(line)
-            yield _prepare_document(document, document.get("id"))
-            count += 1
-            if limit is not None and count >= limit:
-                break
+    for path in (_CACHE_PATH, _SAMPLE_PATH):
+        if not path.exists():
+            continue
+        count = 0
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                document = json.loads(line)
+                yield _prepare_document(document, document.get("id"))
+                count += 1
+                if limit is not None and count >= limit:
+                    return
+        if count:
+            return
 
 
 def _load_from_directory(root: Path, *, split: str, limit: Optional[int]) -> Iterator[Dict[str, Any]]:

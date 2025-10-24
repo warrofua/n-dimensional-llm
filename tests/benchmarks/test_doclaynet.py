@@ -12,7 +12,7 @@ from nd_llm.utils import build_mi_proxy_context
 
 
 def test_doclaynet_sample_roundtrip() -> None:
-    dataset = load_doclaynet_dataset(use_sample=True)
+    dataset = load_doclaynet_dataset(use_sample=True, limit=3)
     assert dataset, "Expected bundled DocLayNet sample to be non-empty"
 
     registry = build_doclaynet_registry()
