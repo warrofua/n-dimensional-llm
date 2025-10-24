@@ -30,6 +30,11 @@ __all__ = [
 ]
 
 
+# Paths to bundled DocLayNet caches and samples.
+_DATA_DIR = Path(__file__).with_name("data")
+_CACHE_PATH = _DATA_DIR.joinpath("doclaynet_cache.jsonl")
+_SAMPLE_PATH = _DATA_DIR.joinpath("doclaynet_sample.jsonl")
+
 # A tiny in-memory sample used when the real dataset is unavailable.  The sample
 # mirrors the minimal structure the conversion helpers expect, keeping runtime
 # behaviour deterministic for doctests and local experiments.
@@ -359,6 +364,24 @@ def _prepare_tokens(
 
 
 def _load_sample(limit: Optional[int]) -> Iterator[Dict[str, Any]]:
+    for path in (_CACHE_PATH, _SAMPLE_PATH):
+        if not path.exists():
+            continue
+        count = 0
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                raw = json.loads(line)
+                yield _prepare_document(
+                    raw, default_doc_id=str(raw.get("id") or "doclaynet-sample")
+                )
+                count += 1
+                if limit is not None and count >= limit:
+                    return
+        if count:
+            return
+
     count = 0
     while True:
         yield deepcopy(_SAMPLE_DOCUMENT)
@@ -399,7 +422,23 @@ def _prepare_document(raw: Mapping[str, Any], *, default_doc_id: str) -> Dict[st
     metadata.setdefault("page_id", page_id)
     metadata.setdefault("split", str(raw.get("split") or metadata.get("split") or ""))
 
-    raw_segments = raw.get("segments") or raw.get("entities") or []
+    raw_tokens_source = raw.get("tokens") or raw.get("words")
+    tokens_by_id: Dict[str, Mapping[str, Any]] = {}
+    if isinstance(raw_tokens_source, Sequence):
+        for index, raw_token in enumerate(raw_tokens_source):
+            if not isinstance(raw_token, Mapping):
+                continue
+            token_id_value = raw_token.get("token_id") or raw_token.get("id") or index
+            try:
+                token_id = int(token_id_value)
+            except (TypeError, ValueError):
+                token_id = index
+            token_key = str(token_id)
+            tokens_by_id[token_key] = raw_token
+
+    raw_segments = (
+        raw.get("segments") or raw.get("entities") or raw.get("regions") or []
+    )
     segments: List[Dict[str, Any]] = []
     for index, raw_segment in enumerate(raw_segments):
         if not isinstance(raw_segment, Mapping):
@@ -413,8 +452,33 @@ def _prepare_document(raw: Mapping[str, Any], *, default_doc_id: str) -> Dict[st
         confidence_value = raw_segment.get("confidence")
         confidence = float(confidence_value) if confidence_value is not None else 0.0
         polygon = _coerce_polygon(raw_segment.get("polygon") or raw_segment.get("bbox"))
+        segment_tokens = raw_segment.get("tokens") or raw_segment.get("words")
+        token_ids = raw_segment.get("token_ids") or []
+        if not segment_tokens and token_ids and tokens_by_id:
+            recovered_tokens = []
+            if isinstance(token_ids, Sequence):
+                for token_id_value in token_ids:
+                    token_key = str(token_id_value)
+                    token_entry = tokens_by_id.get(token_key)
+                    if token_entry is None:
+                        try:
+                            token_entry = tokens_by_id.get(str(int(token_id_value)))
+                        except (TypeError, ValueError):
+                            token_entry = None
+                    if token_entry is None:
+                        continue
+                    token_map = dict(token_entry)
+                    if "token_id" not in token_map:
+                        token_map["token_id"] = (
+                            token_entry.get("id")
+                            if isinstance(token_entry, Mapping)
+                            else token_id_value
+                        )
+                    recovered_tokens.append(token_map)
+            segment_tokens = recovered_tokens
+
         tokens = _prepare_tokens(
-            raw_segment.get("tokens") or raw_segment.get("words"),
+            segment_tokens,
             fallback_text=str(raw_segment.get("text", "")),
         )
         segments.append(
