@@ -170,10 +170,6 @@ def main(argv: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     return report
 
 
-if __name__ == "__main__":  # pragma: no cover - CLI entry point
-    main()
-
-
 def _estimate_flops_from_logs(logs: Mapping[str, Any], hidden_dim: int) -> float:
     tokens_available = logs.get("tokens_available")
     if isinstance(tokens_available, torch.Tensor) and tokens_available.numel():
@@ -232,3 +228,7 @@ def _fano_lower_bound(conditional_entropy: float, num_labels: int) -> float:
     if denom == 0:
         return 0.0
     return max(0.0, (conditional_entropy - 1.0) / denom)
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry point
+    main()
