@@ -5,16 +5,20 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+if __package__ is None or __package__ == "":
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from .common import average_accuracy, build_invoice_dataloader, build_invoice_model
+from scripts.common import average_accuracy, build_invoice_dataloader, build_invoice_model
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
