@@ -5,7 +5,7 @@ from typing import Any, Dict, Mapping, Sequence
 import torch
 import torch.nn as nn
 
-from nd_llm.bottleneck import CompressionResult, CompressionTelemetry
+from nd_llm.bottleneck import CompressionResult, CompressionTelemetry, IBottleneck
 from nd_llm.encoders import LayoutEncoder, TextEncoder
 from nd_llm.metrics import MIProxy
 from nd_llm.model import NDEncoderDecoder
@@ -33,13 +33,14 @@ class RecordingMIProxy(nn.Module):
         return mi_bound, logits
 
 
-class FakeBottleneck:
+class FakeBottleneck(IBottleneck):
     """Deterministic bottleneck stub that returns predefined selections."""
 
     def __init__(self, selections: Mapping[str, Sequence[int]]) -> None:
         self._selections = {str(field): list(indices) for field, indices in selections.items()}
         total_selected = sum(len(indices) for indices in self._selections.values())
-        self.target_budget = max(1, total_selected)
+        target_budget = max(1, total_selected)
+        super().__init__(target_budget=target_budget)
 
     def compress(
         self,
