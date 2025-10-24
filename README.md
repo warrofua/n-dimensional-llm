@@ -199,6 +199,59 @@ affinity:
   - [audio_chunk, timestamp, by: [session_id, t]]
 ```
 
+---
+
+## Using real datasets
+
+Fetch the official FUNSD and DocLayNet releases with the helper script.  By
+default datasets are placed in ``~/.cache/n-dimensional-llm``; override the
+location via ``ND_LLM_DATA_CACHE`` or ``--cache-dir`` if required.
+
+```bash
+python scripts/download_datasets.py
+```
+
+The FUNSD benchmark helper consumes the extracted ``funsd`` directory.  Set
+``dataset_size=0`` to keep the full corpus and ``use_sample=False`` to disable
+the bundled JSON sample.
+
+```bash
+python - <<'PY'
+from pathlib import Path
+
+from benchmarks.doc_understanding import run_funsd_benchmark
+
+cache = Path.home() / ".cache" / "n-dimensional-llm"
+report = run_funsd_benchmark(
+    budget_values=(8, 12, 16),
+    data_root=cache / "funsd",
+    dataset_size=0,
+    use_sample=False,
+)
+print(report["budgets"][0]["metrics"])  # inspect results
+PY
+```
+
+DocLayNet follows the same convention, reading from the ``doclaynet`` directory
+inside the cache.
+
+```bash
+python - <<'PY'
+from pathlib import Path
+
+from benchmarks.doc_understanding import run_doclaynet_benchmark
+
+cache = Path.home() / ".cache" / "n-dimensional-llm"
+report = run_doclaynet_benchmark(
+    budget_values=(6, 12, 18),
+    data_root=cache / "doclaynet",
+    dataset_size=0,
+    use_sample=False,
+)
+print(report["budgets"][0]["metrics"])  # inspect results
+PY
+```
+
 ### Runnable multi-field invoice demo
 
 Kick the tyres with the maintained invoice walk-through that wires the registry, stub encoders, bottleneck, STM, and orchestrator together:
