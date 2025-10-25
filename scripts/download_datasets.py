@@ -35,20 +35,19 @@ _DATASETS: Dict[str, DatasetSpec] = {
         name="funsd",
         url="https://guillaumejaume.github.io/FUNSD/dataset.zip",
         archive_name="funsd_dataset.zip",
-        checksum="7a3736d61b05b0d3181c247ac0b6dcbfb995ad5b9b5cde52d2ed571f25b4360f",
+        checksum="c31735649e4f441bcbb4fd0f379574f7520b42286e80b01d80b445649d54761f",
         target_subdir="funsd",
         archive_type="zip",
     ),
     "doclaynet": DatasetSpec(
         name="doclaynet",
         url=(
-            "https://huggingface.co/datasets/pierreguillou/DocLayNet-base/resolve/main/"
-            "DocLayNet-base.tar.gz?download=1"
+            "https://huggingface.co/datasets/pierreguillou/DocLayNet-base/blob/main/data/dataset_base.zip"
         ),
         archive_name="doclaynet-base.tar.gz",
         checksum=None,
         target_subdir="doclaynet",
-        archive_type="tar",
+        archive_type="zip",
     ),
 }
 
