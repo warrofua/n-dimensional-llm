@@ -203,7 +203,8 @@ affinity:
 
 ## Using real datasets
 
-Fetch the official FUNSD and DocLayNet releases with the helper script.  By
+Fetch the official FUNSD release and the compact DocLayNet-base snapshot with the
+helper script.  By
 default datasets are placed in ``~/.cache/n-dimensional-llm``; override the
 location via ``ND_LLM_DATA_CACHE`` or ``--cache-dir`` if required.
 
@@ -233,7 +234,9 @@ PY
 ```
 
 DocLayNet follows the same convention, reading from the ``doclaynet`` directory
-inside the cache.
+inside the cache.  The helper uses the
+`pierreguillou/DocLayNet-base <https://huggingface.co/datasets/pierreguillou/DocLayNet-base>`_
+mirror hosted on Hugging Face instead of the much larger full corpus.
 
 ```bash
 python - <<'PY'
