@@ -52,7 +52,9 @@ def build_funsd_registry() -> Registry:
     registry = Registry()
     registry.add_field("text", keys=["doc_id", "token_id"], salience=True, modality="text")
     registry.add_field("layout", keys=["doc_id", "token_id"], modality="layout")
-    registry.add_field("entity", keys=["doc_id", "entity_id"], modality="entity")
+    registry.add_field(
+        "entity", keys=["doc_id", "entity_id"], modality="entity", salience=True
+    )
     registry.add_affinity("text", "layout", keys=["doc_id", "token_id"])
     registry.add_affinity("entity", "text", keys=["doc_id"])
     registry.validate()
