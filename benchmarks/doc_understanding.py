@@ -13,7 +13,7 @@ import json
 import math
 import random
 import time
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -84,7 +84,7 @@ class BudgetRun:
     kept_tokens: List[int]
     budget_probe: Dict[float, Dict[str, Any]]
     retention_probe: Dict[str, Any]
-    metrics: Dict[str, float]
+    metrics: Dict[str, Any]
     cell_fusions: List[Dict[str, Any]] = field(default_factory=list)
     ablations: Dict[str, Any] = field(default_factory=dict)
 
@@ -292,7 +292,8 @@ def _evaluate_budget(
 
         correct = 0
         kept_tokens: List[int] = []
-        metric_totals: Dict[str, float] = defaultdict(float)
+        metric_totals: Dict[str, Any] = defaultdict(float)
+        kept_by_field_totals: defaultdict[str, int] = defaultdict(int)
         cell_fusions: List[Dict[str, Any]] = []
         total_latency = 0.0
         total_flops = 0.0
@@ -339,6 +340,9 @@ def _evaluate_budget(
             kept = sum(len(indices) for indices in result.telemetry.selected_indices.values())
             kept_tokens.append(kept)
 
+            for field_name, indices in result.telemetry.selected_indices.items():
+                kept_by_field_totals[field_name] += len(indices)
+
             scores_vector = _scores_to_tensor(result.telemetry.selected_scores)
             metadata: Dict[str, Any] = {
                 "budget": budget,
@@ -351,6 +355,7 @@ def _evaluate_budget(
                 extra = metadata_fn(document, result)
                 if extra:
                     metadata.update(dict(extra))
+            compression_record = CompressionRecord.from_result(result, bottleneck=bottleneck)
             orchestrator.log_usage_event(
                 UsageEvent(
                     tensor=[scores_vector],
@@ -417,13 +422,23 @@ def _evaluate_budget(
 
         dataset_size = len(dataset)
         accuracy = correct / dataset_size if dataset_size else 0.0
-        metrics = {key: value / dataset_size for key, value in metric_totals.items()} if dataset_size else {}
+        metrics: Dict[str, Any] = (
+            {key: value / dataset_size for key, value in metric_totals.items()}
+            if dataset_size
+            else {}
+        )
 
         if dataset_size:
             metrics["encoder_latency_seconds"] = total_latency / dataset_size
             metrics["encoder_flops"] = total_flops / dataset_size
             metrics["registration_pre_distortion"] = total_pre_distortion / dataset_size
             metrics["registration_post_distortion"] = total_post_distortion / dataset_size
+            metrics["kept_by_field"] = OrderedDict(
+                (field, total / dataset_size)
+                for field, total in sorted(kept_by_field_totals.items())
+            )
+        else:
+            metrics["kept_by_field"] = OrderedDict()
 
         label_entropy = _entropy(label_counts)
         metrics["label_entropy"] = label_entropy
