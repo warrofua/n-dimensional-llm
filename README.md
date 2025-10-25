@@ -327,7 +327,7 @@ The default report evaluates several budgets on a repeatable dataset; tweak the 
 
 ## Research artifact
 
-The working draft lives at `docs/Toward N-Dimensional LLMs with Information Bottlenecks.pdf`. Replace that file with your latest revision so collaborators always have access to the freshest draft (and mirror it elsewhere as needed).
+The working draft lives at `docs/Toward N-Dimensional LLMs with Information Bottlenecks.pdf`. 
 
 ---
 
