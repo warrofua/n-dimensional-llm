@@ -258,8 +258,12 @@ def _evaluate_budget(
     bottleneck = IBottleneck(target_budget=int(budget))
 
     ablation_totals: Dict[str, Dict[str, Any]] = {}
+    ablation_bottlenecks: Dict[str, IBottleneck] = {}
     if ablations:
         ablation_totals = {name: _make_ablation_totals() for name in ablations}
+        ablation_bottlenecks = {
+            name: IBottleneck(target_budget=int(budget)) for name in ablations
+        }
 
     with TemporaryDirectory(prefix="ndllm-bench-") as tmp:
         storage_dir = Path(tmp)
@@ -365,7 +369,12 @@ def _evaluate_budget(
                         registry_encoders,
                         preferred_fields=mi_field_priorities,
                     )
-                    ab_result = bottleneck.compress(
+                    ab_bottleneck = ablation_bottlenecks.get(name)
+                    if ab_bottleneck is None:
+                        ab_bottleneck = IBottleneck(target_budget=int(budget))
+                        ablation_bottlenecks[name] = ab_bottleneck
+
+                    ab_result = ab_bottleneck.compress(
                         mutated_fields,
                         encoders=registry_encoders,
                         context=ab_context,
