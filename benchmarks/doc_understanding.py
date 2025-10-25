@@ -30,7 +30,7 @@ try:  # pragma: no cover - optional dependency for aggregation helpers
 except Exception:  # pragma: no cover - fallback when torch is unavailable
     torch = None  # type: ignore[assignment]
 
-from nd_llm.bottleneck import CompressionResult, IBottleneck
+from nd_llm.bottleneck import CompressionResult, IBottleneck, RegistryAwareBudgetAllocator
 from nd_llm.orchestration import CompressionRecord, Orchestrator, UsageEvent
 from nd_llm.stm import STM
 from nd_llm.utils import (
@@ -158,8 +158,16 @@ def run_funsd_benchmark(
     data_root: Optional[Path | str] = None,
     use_sample: bool = True,
     seed: int = 0,
+    allocator_kwargs: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Evaluate FUNSD documents for numeric-answer retention under budget constraints."""
+    """Evaluate FUNSD documents for numeric-answer retention under budget constraints.
+
+    Parameters
+    ----------
+    allocator_kwargs:
+        Optional mapping forwarded to :class:`RegistryAwareBudgetAllocator` so callers can
+        specify advanced controls such as ``field_weights`` or ``field_min_quota``.
+    """
 
     registry = build_funsd_registry()
     build_funsd_encoders(registry)
@@ -183,6 +191,7 @@ def run_funsd_benchmark(
             seed=seed,
             ablations=ablations,
             mi_field_priorities=("text", "layout"),
+            allocator_kwargs=allocator_kwargs,
         )
         runs.append(budget_run)
 
@@ -254,15 +263,18 @@ def _evaluate_budget(
     seed: int,
     ablations: Optional[Mapping[str, "AblationFn"]] = None,
     mi_field_priorities: Optional[Sequence[str]] = None,
+    allocator_kwargs: Optional[Mapping[str, Any]] = None,
 ) -> BudgetRun:
-    bottleneck = IBottleneck(target_budget=int(budget))
+    budget_allocator = RegistryAwareBudgetAllocator(**dict(allocator_kwargs or {}))
+    bottleneck = IBottleneck(target_budget=int(budget), budget_allocator=budget_allocator)
 
     ablation_totals: Dict[str, Dict[str, Any]] = {}
     ablation_bottlenecks: Dict[str, IBottleneck] = {}
     if ablations:
         ablation_totals = {name: _make_ablation_totals() for name in ablations}
         ablation_bottlenecks = {
-            name: IBottleneck(target_budget=int(budget)) for name in ablations
+            name: IBottleneck(target_budget=int(budget), budget_allocator=budget_allocator)
+            for name in ablations
         }
 
     with TemporaryDirectory(prefix="ndllm-bench-") as tmp:
@@ -348,7 +360,7 @@ def _evaluate_budget(
                 UsageEvent(
                     tensor=[scores_vector],
                     metadata=metadata,
-                    compression=compression_record,
+                    compression=CompressionRecord.from_result(result, bottleneck=bottleneck),
                 )
             )
 
@@ -377,7 +389,10 @@ def _evaluate_budget(
                     )
                     ab_bottleneck = ablation_bottlenecks.get(name)
                     if ab_bottleneck is None:
-                        ab_bottleneck = IBottleneck(target_budget=int(budget))
+                        ab_bottleneck = IBottleneck(
+                            target_budget=int(budget),
+                            budget_allocator=budget_allocator,
+                        )
                         ablation_bottlenecks[name] = ab_bottleneck
 
                     ab_result = ab_bottleneck.compress(

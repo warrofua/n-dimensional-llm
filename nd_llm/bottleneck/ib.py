@@ -167,6 +167,8 @@ class RegistryAwareBudgetAllocator:
         salience_bonus: float = 1.5,
         key_weight: float = 0.3,
         min_weight: float = 0.05,
+        field_weights: Optional[Mapping[str, Any]] = None,
+        field_min_quota: Optional[Mapping[str, Any]] = None,
     ) -> None:
         if salience_bonus <= 0:
             raise ValueError("salience_bonus must be positive")
@@ -177,6 +179,24 @@ class RegistryAwareBudgetAllocator:
         self.salience_bonus = salience_bonus
         self.key_weight = key_weight
         self.min_weight = min_weight
+        self.field_weights: Dict[str, float] = {}
+        for name, value in (field_weights or {}).items():
+            try:
+                weight = float(value)
+            except (TypeError, ValueError):
+                continue
+            if weight <= 0:
+                continue
+            self.field_weights[str(name)] = weight
+        self.field_min_quota: Dict[str, int] = {}
+        for name, value in (field_min_quota or {}).items():
+            try:
+                quota = int(value)
+            except (TypeError, ValueError):
+                continue
+            if quota <= 0:
+                continue
+            self.field_min_quota[str(name)] = quota
 
     def __call__(
         self,
@@ -188,10 +208,21 @@ class RegistryAwareBudgetAllocator:
         available = sum(token_counts.values())
         limit = min(int(total_budget), available)
         weights: Dict[str, float] = {}
+        quotas: Dict[str, int] = {}
+        if self.field_min_quota:
+            for field in scores:
+                quota = self.field_min_quota.get(field, 0)
+                if quota <= 0:
+                    continue
+                quotas[field] = min(int(quota), token_counts.get(field, 0))
+
         for field in scores:
             info = metadata.get(field, {})
             budget_weight = info.get("budget_weight") if isinstance(info, Mapping) else None
-            if isinstance(budget_weight, (int, float)):
+            override_weight = self.field_weights.get(field)
+            if override_weight is not None:
+                weight = float(override_weight)
+            elif isinstance(budget_weight, (int, float)):
                 weight = float(budget_weight)
             else:
                 keys = info.get("keys", []) if isinstance(info, Mapping) else []
@@ -254,6 +285,39 @@ class RegistryAwareBudgetAllocator:
                 while assigned < limit and allocations[field] < capacity:
                     allocations[field] += 1
                     assigned += 1
+
+        if quotas:
+            donors: Dict[str, int] = {
+                field: allocations.get(field, 0) - quotas.get(field, 0) for field in scores
+            }
+            for field, quota in quotas.items():
+                current = allocations.get(field, 0)
+                if quota <= 0 or current >= quota:
+                    continue
+                needed = quota - current
+                remaining_capacity = token_counts.get(field, 0) - current
+                if remaining_capacity <= 0:
+                    continue
+                needed = min(needed, remaining_capacity)
+                while needed > 0:
+                    donor_field = None
+                    donor_surplus = 0
+                    for candidate, surplus in donors.items():
+                        if candidate == field or surplus <= 0:
+                            continue
+                        if surplus > donor_surplus or (
+                            surplus == donor_surplus and donor_field is not None and candidate < donor_field
+                        ):
+                            donor_field = candidate
+                            donor_surplus = surplus
+                    if donor_field is None or donor_surplus <= 0:
+                        break
+                    transfer = min(needed, donor_surplus)
+                    allocations[donor_field] -= transfer
+                    donors[donor_field] -= transfer
+                    allocations[field] += transfer
+                    donors[field] = allocations[field] - quotas.get(field, 0)
+                    needed -= transfer
 
         return allocations, {field: weights.get(field, 0.0) for field in scores}
 
