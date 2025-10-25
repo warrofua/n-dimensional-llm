@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover - fallback when torch is unavailable
     torch = None  # type: ignore[assignment]
 
 from nd_llm.bottleneck import CompressionResult, IBottleneck
-from nd_llm.orchestration import Orchestrator, UsageEvent
+from nd_llm.orchestration import CompressionRecord, Orchestrator, UsageEvent
 from nd_llm.stm import STM
 from nd_llm.utils import (
     DEFAULT_BACKEND,
@@ -339,10 +339,12 @@ def _evaluate_budget(
                 extra = metadata_fn(document, result)
                 if extra:
                     metadata.update(dict(extra))
+            compression_record = CompressionRecord.from_result(result, bottleneck=bottleneck)
             orchestrator.log_usage_event(
                 UsageEvent(
                     tensor=[scores_vector],
                     metadata=metadata,
+                    compression=compression_record,
                 )
             )
 
