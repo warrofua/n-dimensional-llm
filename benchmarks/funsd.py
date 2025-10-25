@@ -6,7 +6,8 @@ import json
 import importlib
 import importlib.util
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Mapping, MutableMapping, Optional, Sequence
+from types import ModuleType
+from typing import Any, Dict, Iterator, List, Mapping, MutableMapping, Optional, Sequence, cast
 
 from nd_llm.encoders import Encoder, LayoutEncoder, TextEncoder
 from nd_llm.registry import Registry
@@ -161,7 +162,7 @@ def funsd_numeric_answer_label(document: Mapping[str, Any]) -> bool:
     return False
 
 
-_PIL_IMAGE_MODULE: Any | bool | None = None
+_PIL_IMAGE_MODULE: ModuleType | bool | None = None
 
 
 def _load_sample(limit: Optional[int]) -> Iterator[Dict[str, Any]]:
@@ -238,25 +239,31 @@ def _resolve_size(document: Mapping[str, Any]) -> tuple[float, float]:
     for key in ("image_size", "img_size", "size"):
         size = document.get(key)
         if isinstance(size, Sequence) and len(size) >= 2:
-            width = float(size[0] or 1000)
-            height = float(size[1] or 1000)
-            return max(width, 1.0), max(height, 1.0)
+            seq_width = _coerce_float(size[0], 1000.0)
+            seq_height = _coerce_float(size[1], 1000.0)
+            return max(seq_width, 1.0), max(seq_height, 1.0)
     image_meta = document.get("image")
     if isinstance(image_meta, Mapping):
-        width_value = image_meta.get("width") or image_meta.get("w")
-        height_value = image_meta.get("height") or image_meta.get("h")
-        if width_value is not None and height_value is not None:
-            return max(float(width_value), 1.0), max(float(height_value), 1.0)
+        image_width = image_meta.get("width") or image_meta.get("w")
+        image_height = image_meta.get("height") or image_meta.get("h")
+        if image_width is not None and image_height is not None:
+            width_value = _coerce_float(image_width, 1000.0)
+            height_value = _coerce_float(image_height, 1000.0)
+            return max(width_value, 1.0), max(height_value, 1.0)
     page = document.get("page_size")
     if isinstance(page, Mapping):
-        width_value = page.get("width") or page.get("w")
-        height_value = page.get("height") or page.get("h")
-        if width_value is not None and height_value is not None:
-            return max(float(width_value), 1.0), max(float(height_value), 1.0)
-    width = document.get("width")
-    height = document.get("height")
-    if width is not None and height is not None:
-        return max(float(width), 1.0), max(float(height), 1.0)
+        page_width = page.get("width") or page.get("w")
+        page_height = page.get("height") or page.get("h")
+        if page_width is not None and page_height is not None:
+            width_value = _coerce_float(page_width, 1000.0)
+            height_value = _coerce_float(page_height, 1000.0)
+            return max(width_value, 1.0), max(height_value, 1.0)
+    doc_width = document.get("width")
+    doc_height = document.get("height")
+    if doc_width is not None and doc_height is not None:
+        width_value = _coerce_float(doc_width, 1000.0)
+        height_value = _coerce_float(doc_height, 1000.0)
+        return max(width_value, 1.0), max(height_value, 1.0)
 
     search_dirs: List[Path] = []
     for key in ("_source_path",):
@@ -298,8 +305,8 @@ def _resolve_size(document: Mapping[str, Any]) -> tuple[float, float]:
             width_value, height_value = size
             return max(width_value, 1.0), max(height_value, 1.0)
 
-    width_fallback = float(document.get("width") or 1000)
-    height_fallback = float(document.get("height") or 1000)
+    width_fallback = _coerce_float(document.get("width"), 1000.0)
+    height_fallback = _coerce_float(document.get("height"), 1000.0)
     return max(width_fallback, 1.0), max(height_fallback, 1.0)
 
 
@@ -393,22 +400,40 @@ def _resolve_image_candidate(path_value: str, search_dirs: Sequence[Path]) -> Op
 
 def _load_image_size(path: Path) -> Optional[tuple[float, float]]:
     global _PIL_IMAGE_MODULE
-    if _PIL_IMAGE_MODULE is False:
+    module = _PIL_IMAGE_MODULE
+    if module is False:
         return None
-    if _PIL_IMAGE_MODULE is None:
+    if module is None:
         spec = importlib.util.find_spec("PIL.Image")
         if spec is None:
             _PIL_IMAGE_MODULE = False
             return None
-        _PIL_IMAGE_MODULE = importlib.import_module("PIL.Image")
-    if _PIL_IMAGE_MODULE is False:
+        module = importlib.import_module("PIL.Image")
+        if not isinstance(module, ModuleType):
+            _PIL_IMAGE_MODULE = False
+            return None
+        _PIL_IMAGE_MODULE = module
+    if module is False:
         return None
-    ImageModule = _PIL_IMAGE_MODULE
+    module = _PIL_IMAGE_MODULE
+    if module is False or module is None:
+        return None
+    assert isinstance(module, ModuleType)
+    ImageModule = cast(Any, module)
     try:
         with ImageModule.open(path) as handle:  # type: ignore[call-arg]
             return float(handle.width), float(handle.height)
     except (FileNotFoundError, OSError):
         return None
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    try:
+        if value is None:
+            raise TypeError("value is None")
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 __all__ = [
