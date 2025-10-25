@@ -57,6 +57,12 @@ def test_run_funsd_benchmark_smoke() -> None:
     assert entry["cell_fusions"]
     assert "ablations" in entry
     assert isinstance(entry["ablations"], dict)
+    assert "drop_layout" in entry["ablations"]
+    drop_layout_accuracy = entry["ablations"]["drop_layout"]["accuracy"]
+    assert drop_layout_accuracy <= entry["accuracy"]
+    assert "drop_text" in entry["ablations"]
+    drop_text_accuracy = entry["ablations"]["drop_text"]["accuracy"]
+    assert drop_text_accuracy <= entry["accuracy"]
 
 
 def test_run_doclaynet_benchmark_smoke() -> None:
