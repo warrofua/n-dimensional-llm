@@ -13,7 +13,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, Optional, Sequence
 from urllib.request import urlopen
 
 CACHE_ENV = "ND_LLM_DATA_CACHE"
@@ -56,7 +56,7 @@ class DownloadError(RuntimeError):
     """Raised when a dataset download or extraction fails."""
 
 
-def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Download and unpack the official FUNSD and DocLayNet-base datasets into a "
@@ -101,7 +101,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Optional[Iterable[str]] = None) -> int:
+def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     cache_dir = resolve_cache_dir(args.cache_dir)
     overrides = parse_overrides(args.override_checksum)
