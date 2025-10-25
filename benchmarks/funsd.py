@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import importlib
+import importlib.util
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Mapping, MutableMapping, Optional, Sequence
 
@@ -88,6 +90,7 @@ def funsd_fields(document: Mapping[str, Any]) -> Dict[str, List[MutableMapping[s
     text_field: List[MutableMapping[str, Any]] = []
     layout_field: List[MutableMapping[str, Any]] = []
     entity_field: List[MutableMapping[str, Any]] = []
+    document_box_mode = _resolve_box_mode(document)
 
     for entity_index, raw_entity in enumerate(document.get("form", [])):
         entity_id = int(raw_entity.get("id", entity_index))
@@ -117,7 +120,10 @@ def funsd_fields(document: Mapping[str, Any]) -> Dict[str, List[MutableMapping[s
             )
 
             bbox = raw_word.get("box") or raw_word.get("bbox")
-            norm_box = _normalise_box(bbox, width, height)
+            box_mode = _resolve_box_mode(raw_word, raw_entity)
+            if box_mode is None:
+                box_mode = document_box_mode
+            norm_box = _normalise_box(bbox, width, height, mode=box_mode)
             layout_field.append(
                 {
                     "doc_id": doc_id,
@@ -153,6 +159,9 @@ def funsd_numeric_answer_label(document: Mapping[str, Any]) -> bool:
         if any(char.isdigit() for char in str(raw_text)):
             return True
     return False
+
+
+_PIL_IMAGE_MODULE: Any | bool | None = None
 
 
 def _load_sample(limit: Optional[int]) -> Iterator[Dict[str, Any]]:
@@ -193,7 +202,7 @@ def _load_from_directory(root: Path, *, split: str, limit: Optional[int]) -> Ite
         count = 0
         for path in sorted(annotations_dir.glob("*.json")):
             data = json.loads(path.read_text(encoding="utf-8"))
-            document = _prepare_document(data, path.stem)
+            document = _prepare_document(data, path.stem, source=path)
             yield document
             count += 1
             if limit is not None and count >= limit:
@@ -204,11 +213,16 @@ def _load_from_directory(root: Path, *, split: str, limit: Optional[int]) -> Ite
         yield from _load_from_directory(root, split="test", limit=limit)
 
 
-def _prepare_document(raw: Mapping[str, Any], identifier: Optional[str]) -> Dict[str, Any]:
+def _prepare_document(
+    raw: Mapping[str, Any], identifier: Optional[str], *, source: Optional[Path] = None
+) -> Dict[str, Any]:
     document: Dict[str, Any] = dict(raw)
     doc_id = document.get("id") or document.get("doc_id") or identifier or ""
     document["id"] = str(doc_id)
     document["doc_id"] = str(doc_id)
+    if source is not None:
+        document.setdefault("_source_path", str(source))
+        document.setdefault("_source_dir", str(source.parent))
     if "form" not in document:
         if "annotations" in document and isinstance(document["annotations"], Sequence):
             document["form"] = list(document["annotations"])
@@ -227,18 +241,75 @@ def _resolve_size(document: Mapping[str, Any]) -> tuple[float, float]:
             width = float(size[0] or 1000)
             height = float(size[1] or 1000)
             return max(width, 1.0), max(height, 1.0)
+    image_meta = document.get("image")
+    if isinstance(image_meta, Mapping):
+        width_value = image_meta.get("width") or image_meta.get("w")
+        height_value = image_meta.get("height") or image_meta.get("h")
+        if width_value is not None and height_value is not None:
+            return max(float(width_value), 1.0), max(float(height_value), 1.0)
     page = document.get("page_size")
     if isinstance(page, Mapping):
         width_value = page.get("width") or page.get("w")
         height_value = page.get("height") or page.get("h")
         if width_value is not None and height_value is not None:
             return max(float(width_value), 1.0), max(float(height_value), 1.0)
-    width = float(document.get("width") or 1000)
-    height = float(document.get("height") or 1000)
-    return max(width, 1.0), max(height, 1.0)
+    width = document.get("width")
+    height = document.get("height")
+    if width is not None and height is not None:
+        return max(float(width), 1.0), max(float(height), 1.0)
+
+    search_dirs: List[Path] = []
+    for key in ("_source_path",):
+        value = document.get(key)
+        if isinstance(value, str) and value:
+            search_dirs.append(Path(value).parent)
+    for key in ("_source_dir", "image_dir", "image_root", "img_dir", "images_dir"):
+        value = document.get(key)
+        if isinstance(value, str) and value:
+            search_dirs.append(Path(value))
+    search_dirs.append(Path.cwd())
+
+    image_paths: List[str] = []
+    for key in (
+        "image",
+        "image_path",
+        "img_path",
+        "img",
+        "path",
+        "file",
+        "file_path",
+        "filename",
+    ):
+        value = document.get(key)
+        if isinstance(value, str) and value:
+            image_paths.append(value)
+        elif isinstance(value, Mapping):
+            for inner_key in ("path", "file", "file_path", "filename"):
+                inner_value = value.get(inner_key)
+                if isinstance(inner_value, str) and inner_value:
+                    image_paths.append(inner_value)
+
+    for candidate in image_paths:
+        resolved = _resolve_image_candidate(candidate, search_dirs)
+        if resolved is None:
+            continue
+        size = _load_image_size(resolved)
+        if size is not None:
+            width_value, height_value = size
+            return max(width_value, 1.0), max(height_value, 1.0)
+
+    width_fallback = float(document.get("width") or 1000)
+    height_fallback = float(document.get("height") or 1000)
+    return max(width_fallback, 1.0), max(height_fallback, 1.0)
 
 
-def _normalise_box(box: Any, width: float, height: float) -> List[float]:
+def _normalise_box(
+    box: Any,
+    width: float,
+    height: float,
+    *,
+    mode: Optional[str] = None,
+) -> List[float]:
     if isinstance(box, Mapping):
         candidates = [
             box.get("x1"),
@@ -248,12 +319,96 @@ def _normalise_box(box: Any, width: float, height: float) -> List[float]:
         ]
         if all(value is not None for value in candidates):
             box = candidates
+        else:
+            alt_candidates = [
+                box.get("x"),
+                box.get("y"),
+                box.get("w"),
+                box.get("h"),
+            ]
+            if all(value is not None for value in alt_candidates):
+                mode = mode or str(box.get("mode") or box.get("format") or "")
+                box = alt_candidates
     if not isinstance(box, Sequence) or len(box) < 4:
         return [0.0, 0.0, 0.0, 0.0]
     w = max(float(width), 1.0)
     h = max(float(height), 1.0)
-    left, top, right, bottom = [float(box[i]) for i in range(4)]
+    coords = [float(box[i]) for i in range(4)]
+    left, top, third, fourth = coords
+
+    box_mode = (mode or "").lower()
+    convert_xywh = box_mode in {"xywh", "wh", "width_height"}
+
+    right = third
+    bottom = fourth
+    xyxy_valid = right >= left and bottom >= top
+    xywh_plausible = (
+        left + third <= w + 1e-6
+        and top + fourth <= h + 1e-6
+        and third >= 0.0
+        and fourth >= 0.0
+    )
+
+    if not convert_xywh:
+        if not xyxy_valid and xywh_plausible:
+            convert_xywh = True
+        else:
+            right_norm = right / w
+            bottom_norm = bottom / h
+            if xywh_plausible and (
+                right_norm > 1.0 or bottom_norm > 1.0
+            ):
+                convert_xywh = True
+
+    if convert_xywh:
+        right = left + third
+        bottom = top + fourth
+
     return [left / w, top / h, right / w, bottom / h]
+
+
+def _resolve_box_mode(*sources: Mapping[str, Any]) -> Optional[str]:
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        for key in ("box_mode", "bbox_mode", "bbox_format", "box_format", "mode"):
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _resolve_image_candidate(path_value: str, search_dirs: Sequence[Path]) -> Optional[Path]:
+    candidate = Path(path_value)
+    if candidate.is_absolute() and candidate.exists():
+        return candidate
+    for base in search_dirs:
+        resolved = base / candidate
+        if resolved.exists():
+            return resolved
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def _load_image_size(path: Path) -> Optional[tuple[float, float]]:
+    global _PIL_IMAGE_MODULE
+    if _PIL_IMAGE_MODULE is False:
+        return None
+    if _PIL_IMAGE_MODULE is None:
+        spec = importlib.util.find_spec("PIL.Image")
+        if spec is None:
+            _PIL_IMAGE_MODULE = False
+            return None
+        _PIL_IMAGE_MODULE = importlib.import_module("PIL.Image")
+    if _PIL_IMAGE_MODULE is False:
+        return None
+    ImageModule = _PIL_IMAGE_MODULE
+    try:
+        with ImageModule.open(path) as handle:  # type: ignore[call-arg]
+            return float(handle.width), float(handle.height)
+    except (FileNotFoundError, OSError):
+        return None
 
 
 __all__ = [
