@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download official FUNSD and DocLayNet releases into a local cache."""
+"""Download official FUNSD and DocLayNet-base releases into a local cache."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class DatasetSpec:
     name: str
     url: str
     archive_name: str
-    checksum: str
+    checksum: Optional[str]
     target_subdir: str
     archive_type: str  # "zip" or "tar"
 
@@ -41,9 +41,12 @@ _DATASETS: Dict[str, DatasetSpec] = {
     ),
     "doclaynet": DatasetSpec(
         name="doclaynet",
-        url="https://zenodo.org/record/7100509/files/DocLayNet_full.tar.gz?download=1",
-        archive_name="doclaynet_full.tar.gz",
-        checksum="ef81b5f9fef5376a7f8e3e6410b44007598a1df9b591ddf1388d4df769a68443",
+        url=(
+            "https://huggingface.co/datasets/pierreguillou/DocLayNet-base/resolve/main/"
+            "DocLayNet-base.tar.gz?download=1"
+        ),
+        archive_name="doclaynet-base.tar.gz",
+        checksum=None,
         target_subdir="doclaynet",
         archive_type="tar",
     ),
@@ -57,9 +60,9 @@ class DownloadError(RuntimeError):
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Download and unpack the official FUNSD and DocLayNet datasets into a cache "
-            "directory. The cache location defaults to ~/.cache/n-dimensional-llm or "
-            "can be overridden via the ND_LLM_DATA_CACHE environment variable."
+            "Download and unpack the official FUNSD and DocLayNet-base datasets into a "
+            "cache directory. The cache location defaults to ~/.cache/n-dimensional-llm "
+            "or can be overridden via the ND_LLM_DATA_CACHE environment variable."
         )
     )
     parser.add_argument(
@@ -68,7 +71,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         choices=sorted(_DATASETS),
         default=sorted(_DATASETS),
         help=(
-            "One or more datasets to download. Defaults to both FUNSD and DocLayNet."
+            "One or more datasets to download. Defaults to both FUNSD and DocLayNet-base."
         ),
     )
     parser.add_argument(
@@ -154,7 +157,7 @@ def parse_overrides(values: Optional[Iterable[str]]) -> Dict[str, str]:
 def download_and_extract(
     spec: DatasetSpec,
     cache_dir: Path,
-    checksum: str,
+    checksum: Optional[str],
     force: bool,
     skip_checksum: bool,
 ) -> None:
@@ -174,12 +177,17 @@ def download_and_extract(
         fetch_to_file(spec.url, archive_path)
 
         if not skip_checksum:
-            print(f"Validating checksum for {spec.name}")
-            digest = sha256_path(archive_path)
-            if digest.lower() != checksum.lower():
-                raise DownloadError(
-                    "Checksum mismatch: expected "
-                    f"{checksum.lower()} but received {digest.lower()}"
+            if checksum:
+                print(f"Validating checksum for {spec.name}")
+                digest = sha256_path(archive_path)
+                if digest.lower() != checksum.lower():
+                    raise DownloadError(
+                        "Checksum mismatch: expected "
+                        f"{checksum.lower()} but received {digest.lower()}"
+                    )
+            else:
+                print(
+                    "No checksum registered for this dataset; skipping validation by default"
                 )
         else:
             print("Checksum validation skipped by user request")
