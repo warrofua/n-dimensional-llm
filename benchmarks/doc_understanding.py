@@ -274,6 +274,7 @@ def _evaluate_budget(
         ablation_totals = {name: _make_ablation_totals() for name in ablations}
         ablation_bottlenecks = {
             name: IBottleneck(target_budget=int(budget), budget_allocator=budget_allocator)
+            for name in ablations
         }
 
     with TemporaryDirectory(prefix="ndllm-bench-") as tmp:
