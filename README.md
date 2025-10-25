@@ -80,6 +80,7 @@ A control loop that probes what the model remembers, tunes bottleneck budgets, r
 ├── benchmarks/            # Evaluation harnesses and synthetic/sample datasets
 │   └── data/              # Bundled JSONL samples for offline smoke tests
 ├── docs/                  # Design notes, derivations, and research context
+│   └── Toward N-Dimensional LLMs with Information Bottlenecks.pdf  # Research draft (replace with yours)
 ├── examples/              # Runnable demos / notebooks
 ├── scripts/               # Training, evaluation, data prep CLIs
 ├── tests/                 # Unit and smoke tests covering the public API
@@ -87,7 +88,6 @@ A control loop that probes what the model remembers, tunes bottleneck budgets, r
 ├── LICENSE
 ├── CITATION.cff
 ├── pyproject.toml
-└── Toward N-Dimensional LLMs with Information Bottlenecks.pdf  # Research draft (replace with yours)
 ```
 
 ---
@@ -324,7 +324,7 @@ The default report evaluates several budgets on a repeatable dataset; tweak the 
 
 ## Research artifact
 
-The working draft lives at `Toward N-Dimensional LLMs with Information Bottlenecks.pdf` in the repository root. Replace that file with your latest revision (and optionally mirror it under `docs/` for GitHub Pages).
+The working draft lives at `docs/Toward N-Dimensional LLMs with Information Bottlenecks.pdf`. Replace that file with your latest revision so collaborators always have access to the freshest draft (and mirror it elsewhere as needed).
 
 ---
 
