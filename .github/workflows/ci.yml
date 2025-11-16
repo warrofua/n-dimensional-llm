@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - "3.14"
+          - "3.12"
 
     steps:
       - name: Checkout repository
@@ -73,5 +73,5 @@ jobs:
         if: steps.detect_configs.outputs.mypy == 'true'
         run: mypy .
 
-      - name: Run tests
-        run: pytest tests/examples/test_multi_field_invoice.py tests/benchmarks/test_doc_understanding.py
+      - name: Run tests with coverage
+        run: pytest --cov=nd_llm --cov-report=term-missing tests/examples/test_multi_field_invoice.py tests/benchmarks/test_doc_understanding.py

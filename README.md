@@ -1,5 +1,9 @@
 # N‑Dimensional LLM (ND‑LLM)
 
+[![CI](https://github.com/warrofua/n-dimensional-llm/actions/workflows/ci.yml/badge.svg)](https://github.com/warrofua/n-dimensional-llm/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 **Grounded, multi‑field language models with information‑bottleneck compression and semantic tensor memory.**
 
 > Build LLMs that reason across *N* synchronized fields (text, layout, space, time, sensors, …) while using **variable‑rate token bottlenecks**—guided by information‑bottleneck / rate–distortion objectives—to slash context load without sacrificing fidelity. Persist compressed states in **Semantic Tensor Memory (STM)** and adapt over time via an **Auto‑IB Orchestrator**.

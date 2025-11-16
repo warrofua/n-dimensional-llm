@@ -7,14 +7,14 @@ name = "nd-llm"
 version = "0.1.0"
 description = "Foundational scaffolding for the n-dimensional LLM framework."
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 license = {text = "Apache-2.0"}
 authors = [
   {name = "N-Dimensional LLM Contributors"}
 ]
 classifiers = [
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
 ]
@@ -24,10 +24,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/n-dimensional-llm/n-dimensional-llm"
-Documentation = "https://github.com/n-dimensional-llm/n-dimensional-llm/tree/main/docs"
-Repository = "https://github.com/n-dimensional-llm/n-dimensional-llm"
-"Bug Tracker" = "https://github.com/n-dimensional-llm/n-dimensional-llm/issues"
+Homepage = "https://github.com/warrofua/n-dimensional-llm"
+Documentation = "https://github.com/warrofua/n-dimensional-llm/tree/main/docs"
+Repository = "https://github.com/warrofua/n-dimensional-llm"
+"Bug Tracker" = "https://github.com/warrofua/n-dimensional-llm/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -51,11 +51,46 @@ where = ["."]
 include = ["nd_llm"]
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.12"
 ignore_missing_imports = true
 follow_imports = "skip"
 files = [
   "benchmarks",
-  "nd_llm/registry",
+  "nd_llm",
+  "scripts",
   "tests",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = [
+  "--strict-markers",
+  "--strict-config",
+  "--color=yes",
+]
+
+[tool.coverage.run]
+source = ["nd_llm"]
+omit = [
+  "*/tests/*",
+  "*/__pycache__/*",
+  "*/.venv/*",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+  "pragma: no cover",
+  "def __repr__",
+  "raise AssertionError",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+  "class .*\\bProtocol\\):",
+  "@(abc\\.)?abstractmethod",
 ]
