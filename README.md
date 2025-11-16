@@ -52,10 +52,10 @@ A control loop that probes what the model remembers, tunes bottleneck budgets, r
 
 #### Operating the Auto‑IB Orchestrator
 
-* Wrap each STM append in a :class:`UsageEvent` that can carry the compressed tensor **and** a :class:`CompressionRecord`. Telemetry such as selected indices, token counts, and IB metrics are captured under ``metadata["compression"]`` and mirrored in the STM index.
+* Wrap each STM append in a :class:`UsageEvent` that can carry the compressed tensor **and** a :class:`CompressionRecord`. Telemetry such as selected indices, token counts, IB/Ml lower bounds, constraint verdicts, and canonical cell artefacts are captured under ``metadata["compression"]`` and mirrored in the STM index.
 * Call :func:`Orchestrator.tune_budget` periodically (e.g., after processing a batch). The default :class:`CompressionRatioBudgetStrategy` looks at the recent compression ratios and adjusts ``Orchestrator.config.target_budget`` upward when quality drops or downward when utilisation saturates. Inspect ``Orchestrator.budget_history`` to audit the decisions.
 * Trigger :func:`Orchestrator.run_retention_probe` on a schedule to sample STM entries, reconstruct them with the stored :class:`~nd_llm.bottleneck.ib.IBottleneck` telemetry, and monitor reconstruction quality / drift. Any missing or malformed telemetry is surfaced under ``probe["issues"]``.
-* Use the new STM query helpers such as :func:`STM.query` or :func:`STM.list_by_alignment` to fetch aligned batches of entries (e.g., all shards for a ``session_id``) without loading every payload.
+* Use the new STM query helpers such as :func:`STM.query` or :func:`STM.list_by_alignment`, plus the holographic superposition channels (``write_superposition``/``read_superposition``) to fetch aligned batches of entries or aggregate long-horizon fingerprints without loading every payload.
 
 ---
 
@@ -175,6 +175,7 @@ usage_key = orchestrator.log_usage_event(
 ### Bottleneck tuning knobs
 
 * **Objective / scoring:** pass `objective="l2-norm"` (default) for magnitude gating or `objective="query-dot"` to enable the built-in query-conditioned scorer. You can also inject your own scorer via the `scorer` argument; it receives `(field, embeddings, metadata, context)` and should return a score per token.
+* **Mutual-information blending:** supply an `MIProxy` + `mi_targets` via :func:`build_mi_proxy_context` and set `mi_score_weight` to trade off between the base scorer and per-token MI similarities.
 * **Query context:** provide query embeddings or other conditioning signals through the `context` mapping (e.g. `{"query_embedding": vector}`) and they will be forwarded to the scoring strategy.
 * **Budget allocator:** override `budget_allocator` to customize per-field sub-budgets. The default `RegistryAwareBudgetAllocator` inspects registry metadata (salience flags, alignment keys, optional `budget_weight`) and records the resulting `field_budgets` and `allocation_weights` in `CompressionTelemetry`.
 * **Metrics:** every call to `compress` returns a `CompressionResult.metrics` dictionary with IB/RD proxies such as `ib_proxy`, `rd_proxy`, and an `embedding_reconstruction_error` computed from kept vs. dropped embeddings.
@@ -203,57 +204,67 @@ affinity:
 
 ## Using real datasets
 
-Fetch the official FUNSD release and the compact DocLayNet-base snapshot with the
-helper script.  By
-default datasets are placed in ``~/.cache/n-dimensional-llm``; override the
-location via ``ND_LLM_DATA_CACHE`` or ``--cache-dir`` if required.
+The [CORD receipt dataset](https://huggingface.co/datasets/naver-clova-ix/cord-v2) is wired into the benchmark harness for a realistic document-understanding task. Install the optional dependency stack (``pip install .[benchmarks]`` or the explicit packages below) when you want the full dataset instead of the bundled JSONL sample:
 
 ```bash
-python scripts/download_datasets.py
+pip install datasets pillow
 ```
-
-The FUNSD benchmark helper consumes the extracted ``funsd`` directory.  Set
-``dataset_size=0`` to keep the full corpus and ``use_sample=False`` to disable
-the bundled JSON sample.
 
 ```bash
 python - <<'PY'
-from pathlib import Path
+from benchmarks.doc_understanding import run_cord_benchmark
 
-from benchmarks.doc_understanding import run_funsd_benchmark
-
-cache = Path.home() / ".cache" / "n-dimensional-llm"
-report = run_funsd_benchmark(
-    budget_values=(8, 12, 16),
-    data_root=cache / "funsd",
-    dataset_size=0,
-    use_sample=False,
+report = run_cord_benchmark(
+    budget_values=(4, 8, 12),
+    dataset_size=8,
+    use_sample=True,  # flip to False to stream the HF split or use a local directory
+    data_root="datasets",  # automatically combines subdirectories named CORD*
+    threshold=250_000,
 )
 print(report["budgets"][0]["metrics"])  # inspect results
 PY
 ```
 
-DocLayNet follows the same convention, reading from the ``doclaynet`` directory
-inside the cache.  The helper uses the
-`pierreguillou/DocLayNet-base <https://huggingface.co/datasets/pierreguillou/DocLayNet-base>`_
-mirror hosted on Hugging Face instead of the much larger full corpus.
+Set ``data_root`` to the directory that contains the official ``train/dev/test/json`` folders (or to a parent folder that has subdirectories named ``CORD*``—the loader will merge them) once you download the [CORD release](https://github.com/clovaai/cord).
+
+### ChartQA field benchmark
+
+ChartQA-style chart reasoning now has a lightweight harness that exercises question text alongside structured chart metadata. The default configuration consumes the bundled sample; point it at the official dataset (e.g. [lmms-lab/chartqa](https://huggingface.co/lmms-lab/chartqa) or the [GitHub release](https://github.com/IBM/chartqa)) when you want full coverage:
+
+```python
+from benchmarks.chartqa import run_chartqa_benchmark
+
+report = run_chartqa_benchmark(
+    budget_values=(2, 4, 6),
+    dataset_size=4,
+    use_sample=True,  # set False once you've downloaded the dataset locally
+)
+print(report)
+```
+
+### Rate–distortion & Fano audits
+
+Use the `scripts/rd_audit.py` CLI to sweep token budgets for the CORD benchmark in both N-D and text-only configurations, then compute empirical rate–distortion curves and Fano-consistent error bounds:
 
 ```bash
-python - <<'PY'
-from pathlib import Path
-
-from benchmarks.doc_understanding import run_doclaynet_benchmark
-
-cache = Path.home() / ".cache" / "n-dimensional-llm"
-report = run_doclaynet_benchmark(
-    budget_values=(6, 12, 18),
-    data_root=cache / "doclaynet",
-    dataset_size=0,
-    use_sample=False,
-)
-print(report["budgets"][0]["metrics"])  # inspect results
-PY
+python -m scripts.rd_audit --budgets 4 8 12 --dataset-size 8 --use-sample
 ```
+
+Both modes record the mean mutual-information lower bound (from the MI proxy) alongside each budget’s accuracy/distortion so you can visualise the dominance of N-D inputs at fixed rate.
+
+### Local LLM harness (Ollama)
+
+If you have [Ollama](https://ollama.com) with `llama3.1:8b` installed locally, you can replay compressed field summaries into the model for qualitative checks:
+
+```bash
+python -m scripts.ollama_harness \
+  --dataset cord \
+  --data-root datasets \
+  --use-sample \
+  --dry-run
+```
+
+Drop `--dry-run` to stream the prompt to your Ollama instance (`http://127.0.0.1:11434` by default). ChartQA prompts are supported as well (`--dataset chartqa`).
 
 ### Runnable multi-field invoice demo
 

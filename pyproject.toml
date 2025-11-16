@@ -41,6 +41,10 @@ docs = [
   "mkdocs>=1.5",
   "mkdocs-material>=9.5",
 ]
+benchmarks = [
+  "datasets>=4.4",
+  "Pillow>=10.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

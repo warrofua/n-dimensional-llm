@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 from nd_llm.bottleneck.ib import CompressionResult, CompressionTelemetry, IBottleneck
+from nd_llm.constraints import ConstraintModule, ConstraintResult
 from nd_llm.orchestration.budget import (
     BudgetDecision,
     BudgetObservation,
@@ -795,6 +796,8 @@ class Orchestrator:
         meta_model: Optional[BudgetMetaModel] = None,
         *,
         auto_attach_meta_model: bool = True,
+        constraints: Optional[Sequence[ConstraintModule]] = None,
+        superposition_channels: Optional[Sequence[str]] = None,
     ) -> None:
         self._stm = stm
         self._config = config
@@ -807,6 +810,11 @@ class Orchestrator:
         self._last_policy_metadata: Optional[Dict[str, Any]] = None
         self._recent_probe_outcomes: List[Dict[str, Any]] = []
         self._probe_history_limit = 5
+        self._constraints: List[ConstraintModule] = list(constraints or [])
+        self._recent_constraint_results: List[Dict[str, Any]] = []
+        self._superposition_channels: Tuple[str, ...] = tuple(
+            channel for channel in (superposition_channels or []) if channel
+        )
 
     @classmethod
     def from_components(
@@ -822,6 +830,8 @@ class Orchestrator:
         bottleneck: Optional["IBottleneck"] = None,
         meta_model: Optional[BudgetMetaModel] = None,
         auto_attach_meta_model: bool = True,
+        constraints: Optional[Sequence[ConstraintModule]] = None,
+        superposition_channels: Optional[Sequence[str]] = None,
     ) -> "Orchestrator":
         """Construct an orchestrator from primitive components."""
 
@@ -844,6 +854,8 @@ class Orchestrator:
             bottleneck=bottleneck,
             meta_model=meta_model,
             auto_attach_meta_model=auto_attach_meta_model,
+            constraints=constraints,
+            superposition_channels=superposition_channels,
         )
 
     @property
@@ -970,6 +982,21 @@ class Orchestrator:
             if layout_signature and "layout_signature" not in merged_compression:
                 merged_compression["layout_signature"] = layout_signature
 
+        constraint_results = self._evaluate_constraints(event)
+        if constraint_results:
+            metadata["constraints"] = [result.to_dict() for result in constraint_results]
+            if any(not result.satisfied for result in constraint_results):
+                issues = metadata.setdefault("issues", [])
+                for result in constraint_results:
+                    if not result.satisfied:
+                        issues.append(
+                            {
+                                "type": "constraint_violation",
+                                "constraint": result.name,
+                                "details": dict(result.details),
+                            }
+                        )
+
         metadata.setdefault("task", metadata.get("policy_name", self._config.policy_name))
 
         attempt_key = base_key
@@ -985,6 +1012,7 @@ class Orchestrator:
                 metadata["duplicate_attempts"] = duplicate_attempts
                 attempt_key = self._generate_key(prefix=base_key)
 
+        self._update_superpositions(event, metadata)
         self._usage_log.append(attempt_key)
         return attempt_key
 
@@ -1378,6 +1406,51 @@ class Orchestrator:
         self._recent_probe_outcomes.append(payload)
         if self._probe_history_limit > 0 and len(self._recent_probe_outcomes) > self._probe_history_limit:
             self._recent_probe_outcomes = self._recent_probe_outcomes[-self._probe_history_limit :]
+
+    def _evaluate_constraints(self, event: UsageEvent) -> List[ConstraintResult]:
+        if not self._constraints:
+            return []
+        results: List[ConstraintResult] = []
+        for module in self._constraints:
+            try:
+                outcome = module.evaluate(
+                    stm=self._stm,
+                    event=event,
+                    compression=event.compression,
+                )
+            except Exception as exc:
+                outcome = ConstraintResult(
+                    name=getattr(module, "name", module.__class__.__name__),
+                    satisfied=False,
+                    confidence=0.0,
+                    details={"error": str(exc)},
+                )
+            results.append(outcome)
+        if results:
+            record = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "results": [result.to_dict() for result in results],
+            }
+            self._recent_constraint_results.append(record)
+            if self._probe_history_limit > 0:
+                self._recent_constraint_results = self._recent_constraint_results[-self._probe_history_limit :]
+        return results
+
+    def _update_superpositions(self, event: UsageEvent, metadata: Mapping[str, Any]) -> None:
+        if not self._superposition_channels:
+            return
+        payload = event.tensor
+        if payload is None:
+            return
+        base_metadata = {
+            "policy_name": metadata.get("policy_name"),
+            "task": metadata.get("task"),
+        }
+        for channel in self._superposition_channels:
+            try:
+                self._stm.write_superposition(channel, payload, metadata=base_metadata)
+            except Exception:
+                continue
 
     def _resolve_meta_model_probe_context(
         self,

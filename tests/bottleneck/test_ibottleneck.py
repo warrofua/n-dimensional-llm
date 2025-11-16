@@ -2,6 +2,7 @@ import math
 
 import pytest
 import torch
+import torch.nn as nn
 
 from nd_llm.bottleneck import (
     IBottleneck,
@@ -72,6 +73,39 @@ def test_query_conditioned_scoring_prefers_query_aligned_tokens():
     assert result.telemetry.selected_indices["text"] == [0]
     assert result.telemetry.field_budgets["text"] == 1
     assert result.telemetry.selected_scores["text"][0] == pytest.approx(1.0)
+
+
+class DeterministicMIProxy(nn.Module):
+    def __init__(self, dim: int):
+        super().__init__()
+        self.tau = 1.0
+        self.register_parameter("_scale", nn.Parameter(torch.ones(1)))
+        self._dim = dim
+
+    def f(self, z: torch.Tensor) -> torch.Tensor:  # noqa: D401 - matching MIProxy API
+        return z
+
+    def h(self, target: torch.Tensor) -> torch.Tensor:
+        return target
+
+    def forward(self, z: torch.Tensor, y: torch.Tensor):  # noqa: D401 - compatibility shim
+        logits = torch.zeros(z.size(0), y.size(0), device=z.device, dtype=z.dtype)
+        zero = torch.zeros((), device=z.device, dtype=z.dtype)
+        return zero, logits
+
+
+def test_mi_scoring_prioritises_target_aligned_tokens():
+    fields = {"text": ["t0", "t1", "t2"]}
+    encoders = {
+        "text": MockEncoder([[1.0, 0.0], [0.0, 5.0], [0.0, 4.5]]),
+    }
+    context = {"mi_targets": {"text": [1.0, 0.0]}}
+    proxy = DeterministicMIProxy(dim=2)
+
+    bottleneck = IBottleneck(target_budget=1, mi_score_weight=0.8)
+    result = bottleneck.compress(fields, encoders, context=context, mi_proxy=proxy)
+
+    assert result.telemetry.selected_indices["text"] == [0]
 
 
 def test_budget_allocator_respects_salience_metadata():
