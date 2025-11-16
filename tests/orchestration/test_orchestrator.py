@@ -10,6 +10,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from nd_llm.bottleneck import CompressionResult, CompressionTelemetry
+from nd_llm.constraints import FieldActivationConstraint
 from nd_llm.orchestration import (
     CompressionRecord,
     CompressionRatioBudgetStrategy,
@@ -384,3 +386,46 @@ def test_from_components_attaches_default_meta_model(tmp_path) -> None:
     assert meta_summary["model"] == model_name
     assert meta_summary["selected"]["candidate"]["budget"] == pytest.approx(proposed)
     assert meta_summary["selected"]["score"] > 0
+
+
+def test_orchestrator_runs_constraints_and_superpositions(tmp_path) -> None:
+    storage_config = STMConfig(storage_dir=tmp_path)
+    stm = STM(storage_config)
+    constraint = FieldActivationConstraint(field="text", min_tokens=1)
+    orchestrator = Orchestrator(
+        stm=stm,
+        config=OrchestratorConfig(target_budget=1.0, policy_name="constraint-test", budget_step=0.5),
+        constraints=[constraint],
+        superposition_channels=("usage",),
+    )
+
+    telemetry = CompressionTelemetry(
+        selected_indices={"text": [0]},
+        selected_scores={"text": [0.5]},
+        token_counts={"text": 1},
+        budget=1,
+        field_budgets={"text": 1},
+        allocation_weights={"text": 1.0},
+        dropped_indices={"text": []},
+        residual_statistics={},
+        quantized_embeddings={},
+    )
+    result = CompressionResult(
+        compressed_fields={"text": ["token"]},
+        telemetry=telemetry,
+        metrics={"ib_proxy": 0.1},
+    )
+    record = CompressionRecord.from_result(result, bottleneck="ib-test")
+    event = UsageEvent(
+        key="constraint-event",
+        tensor=[0.1, 0.2],
+        metadata={},
+        compression=record,
+    )
+
+    key = orchestrator.log_usage_event(event)
+    entry = stm.get_index_entry(key)
+    assert "constraints" in entry["metadata"]
+    vector, info = stm.read_superposition("usage")
+    assert vector
+    assert info["channel"] == "usage"

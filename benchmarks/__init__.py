@@ -7,29 +7,25 @@ from typing import Any
 
 __all__ = [
     "run_benchmark",
-    "run_doclaynet_benchmark",
-    "run_funsd_benchmark",
+    "run_cord_benchmark",
+    "run_chartqa_benchmark",
     "run_long_qa_benchmark",
     "run_video_qa_benchmark",
-    "build_doclaynet_registry",
-    "build_doclaynet_encoders",
-    "doclaynet_fields",
-    "doclaynet_contains_table",
-    "load_doclaynet_dataset",
+    "build_cord_registry",
+    "build_cord_encoders",
+    "cord_fields",
+    "cord_high_total_label",
+    "cord_total_amount",
+    "load_cord_dataset",
+    "build_chartqa_registry",
+    "build_chartqa_encoders",
+    "chartqa_fields",
+    "chartqa_answer",
+    "load_chartqa_dataset",
     "AmountEncoder",
     "build_invoice_encoders",
     "build_invoice_registry",
-    "build_funsd_encoders",
-    "build_funsd_registry",
-    "funsd_fields",
-    "funsd_numeric_answer_label",
     "invoice_fields",
-    "load_funsd_dataset",
-    "build_doclaynet_encoders",
-    "build_doclaynet_registry",
-    "doclaynet_fields",
-    "doclaynet_contains_table",
-    "load_doclaynet_dataset",
     "synthetic_invoice",
     "synthetic_invoice_dataset",
     "build_longqa_registry",
@@ -52,14 +48,33 @@ __all__ = [
 def __getattr__(name: str) -> Any:  # pragma: no cover - thin convenience wrapper
     if name == "run_benchmark":
         return import_module("benchmarks.doc_understanding").run_benchmark
-    if name == "run_doclaynet_benchmark":
-        return import_module("benchmarks.doc_understanding").run_doclaynet_benchmark
-    if name == "run_funsd_benchmark":
-        return import_module("benchmarks.doc_understanding").run_funsd_benchmark
+    if name == "run_cord_benchmark":
+        return import_module("benchmarks.doc_understanding").run_cord_benchmark
+    if name == "run_chartqa_benchmark":
+        return import_module("benchmarks.chartqa").run_chartqa_benchmark
     if name == "run_long_qa_benchmark":
         return import_module("benchmarks.long_qa").run_long_qa_benchmark
     if name == "run_video_qa_benchmark":
         return import_module("benchmarks.video_qa").run_video_qa_benchmark
+    if name in {
+        "build_cord_registry",
+        "build_cord_encoders",
+        "cord_fields",
+        "cord_high_total_label",
+        "cord_total_amount",
+        "load_cord_dataset",
+    }:
+        module = import_module("benchmarks.cord")
+        return getattr(module, name)
+    if name in {
+        "build_chartqa_registry",
+        "build_chartqa_encoders",
+        "chartqa_fields",
+        "chartqa_answer",
+        "load_chartqa_dataset",
+    }:
+        module = import_module("benchmarks.chartqa")
+        return getattr(module, name)
     if name in {
         "AmountEncoder",
         "build_invoice_encoders",
@@ -69,33 +84,6 @@ def __getattr__(name: str) -> Any:  # pragma: no cover - thin convenience wrappe
         "synthetic_invoice_dataset",
     }:
         module = import_module("benchmarks.synthetic")
-        return getattr(module, name)
-    if name in {
-        "build_doclaynet_registry",
-        "build_doclaynet_encoders",
-        "doclaynet_fields",
-        "doclaynet_contains_table",
-        "load_doclaynet_dataset",
-    }:
-        module = import_module("benchmarks.doclaynet")
-        return getattr(module, name)
-    if name in {
-        "build_funsd_encoders",
-        "build_funsd_registry",
-        "funsd_fields",
-        "funsd_numeric_answer_label",
-        "load_funsd_dataset",
-    }:
-        module = import_module("benchmarks.funsd")
-        return getattr(module, name)
-    if name in {
-        "build_doclaynet_encoders",
-        "build_doclaynet_registry",
-        "doclaynet_fields",
-        "doclaynet_contains_table",
-        "load_doclaynet_dataset",
-    }:
-        module = import_module("benchmarks.doclaynet")
         return getattr(module, name)
     if name in {
         "build_longqa_registry",

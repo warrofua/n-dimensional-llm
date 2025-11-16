@@ -20,8 +20,8 @@ We translate these proofs into **code scaffolding** for ND-LLM:
 * a variable-rate **Token Bottleneck** that allocates \(K\) tokens to the most informative, co-registered cells;
 * a pluggable **Field Registry** for synchronized N-D inputs;
 * **InfoNCE mutual-information proxies** to maximize \(I(Y;Z)\) per token;
-* an evaluation suite that plots empirical R–D curves and Fano-consistent error bounds;
-* a memory integration point (**Semantic Tensor Memory**) and an **Auto-IB Orchestrator** sketch for adaptive data/route selection.
+* an evaluation suite that plots empirical R–D curves and Fano-consistent error bounds (see `scripts/rd_audit.py`);
+* a memory integration point (**Semantic Tensor Memory**) with holographic superpositions plus constraint modules, and an **Auto-IB Orchestrator** sketch for adaptive data/route selection.
 
 > “Structure that is known to the data should be paid once in the **input**, not many times in **inference**.”
 

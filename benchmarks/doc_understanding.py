@@ -1,11 +1,4 @@
-"""Synthetic doc-understanding benchmark for accuracy vs. token budget.
-
-For evaluations on the full FUNSD and DocLayNet datasets, first download the
-official releases via ``python scripts/download_datasets.py``.  Then point the
-helpers at the cache directory with ``data_root=PATH / "funsd"`` or
-``data_root=PATH / "doclaynet"`` while setting ``use_sample=False`` and
-``dataset_size=0``.
-"""
+"""Doc-understanding benchmarks for the synthetic invoices and CORD receipts."""
 
 from __future__ import annotations
 
@@ -42,19 +35,14 @@ from nd_llm.utils import (
     STMConfig,
 )
 
-from .doclaynet import (
-    build_doclaynet_encoders,
-    build_doclaynet_registry,
-    doclaynet_contains_table,
-    doclaynet_fields,
-    load_doclaynet_dataset,
-)
-from .funsd import (
-    build_funsd_encoders,
-    build_funsd_registry,
-    funsd_fields,
-    funsd_numeric_answer_label,
-    load_funsd_dataset,
+from .cord import (
+    cord_amount_from_text,
+    build_cord_encoders,
+    build_cord_registry,
+    cord_fields,
+    cord_high_total_label,
+    cord_total_amount,
+    load_cord_dataset,
 )
 from .synthetic import (
     build_invoice_encoders,
@@ -149,102 +137,60 @@ def run_benchmark(
         "budgets": [run.to_dict() for run in runs],
     }
 
-
-def run_funsd_benchmark(
-    budget_values: Iterable[int] = (8, 12, 16),
+def run_cord_benchmark(
+    budget_values: Iterable[int] = (4, 8, 12),
     *,
-    dataset_size: int = 12,
+    dataset_size: int = 8,
     split: str = "train",
-    data_root: Optional[Path | str] = None,
     use_sample: bool = True,
+    data_root: Optional[Path | str] = None,
+    cache_dir: Optional[Path | str] = None,
+    threshold: float = 250_000.0,
     seed: int = 0,
-    allocator_kwargs: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Evaluate FUNSD documents for numeric-answer retention under budget constraints.
+    """Evaluate receipt totals from the CORD dataset under token budget constraints."""
 
-    Parameters
-    ----------
-    allocator_kwargs:
-        Optional mapping forwarded to :class:`RegistryAwareBudgetAllocator` so callers can
-        specify advanced controls such as ``field_weights`` or ``field_min_quota``.
-    """
-
-    registry = build_funsd_registry()
-    build_funsd_encoders(registry)
+    registry = build_cord_registry()
+    build_cord_encoders(registry)
     limit = dataset_size if dataset_size > 0 else None
-    dataset = load_funsd_dataset(data_root, split=split, limit=limit, use_sample=use_sample)
+    dataset = load_cord_dataset(
+        split=split,
+        limit=limit,
+        use_sample=use_sample,
+        data_root=data_root,
+        cache_dir=cache_dir,
+    )
     actual_size = len(dataset)
 
+    def _label_fn(document: Mapping[str, Any]) -> bool:
+        return cord_high_total_label(document, threshold=threshold)
+
+    predict_fn = _cord_prediction_factory(threshold)
+    ablations = _cord_ablation_suite(seed)
     runs: List[BudgetRun] = []
-    ablations = _funsd_ablation_suite(seed)
     for budget in budget_values:
         budget_run = _evaluate_budget(
             budget=int(budget),
             dataset=dataset,
             registry_encoders=registry.encoders,
-            fields_fn=funsd_fields,
-            label_fn=funsd_numeric_answer_label,
-            predict_fn=_funsd_predict_numeric_answer,
-            metadata_fn=_funsd_metadata,
-            policy_name="funsd-doc-benchmark",
+            fields_fn=cord_fields,
+            label_fn=_label_fn,
+            predict_fn=predict_fn,
+            metadata_fn=_cord_metadata,
+            policy_name="cord-receipt-benchmark",
             retention_probe_sample_size=3,
             seed=seed,
             ablations=ablations,
-            mi_field_priorities=("text", "layout"),
-            allocator_kwargs=allocator_kwargs,
+            mi_field_priorities=("layout", "text", "line"),
         )
         runs.append(budget_run)
 
     return {
-        "dataset": "FUNSD",
+        "dataset": "CORD-v2",
         "split": split,
         "dataset_size": actual_size,
         "use_sample": bool(use_sample),
-        "budgets": [run.to_dict() for run in runs],
-    }
-
-
-def run_doclaynet_benchmark(
-    budget_values: Iterable[int] = (6, 12),
-    *,
-    dataset_size: int = 6,
-    split: str = "train",
-    data_root: Optional[Path | str] = None,
-    use_sample: bool = True,
-    seed: int = 0,
-) -> Dict[str, Any]:
-    """Evaluate DocLayNet documents for table retention under budget constraints."""
-
-    registry = build_doclaynet_registry()
-    build_doclaynet_encoders(registry)
-    limit = dataset_size if dataset_size > 0 else None
-    dataset = load_doclaynet_dataset(data_root, split=split, limit=limit, use_sample=use_sample)
-    actual_size = len(dataset)
-
-    runs: List[BudgetRun] = []
-    ablations = _doclaynet_ablation_suite(seed)
-    for budget in budget_values:
-        budget_run = _evaluate_budget(
-            budget=int(budget),
-            dataset=dataset,
-            registry_encoders=registry.encoders,
-            fields_fn=doclaynet_fields,
-            label_fn=doclaynet_contains_table,
-            predict_fn=_doclaynet_predict_contains_table,
-            metadata_fn=_doclaynet_metadata,
-            policy_name="doclaynet-doc-benchmark",
-            retention_probe_sample_size=3,
-            seed=seed,
-            ablations=ablations,
-            mi_field_priorities=("layout", "text", "segment"),
-        )
-        runs.append(budget_run)
-
-    return {
-        "dataset": "DocLayNet",
-        "split": split,
-        "dataset_size": actual_size,
-        "use_sample": bool(use_sample),
+        "threshold": float(threshold),
         "budgets": [run.to_dict() for run in runs],
     }
 
@@ -667,21 +613,11 @@ def _invoice_ablation_suite(seed: int) -> Dict[str, AblationFn]:
     }
 
 
-def _funsd_ablation_suite(seed: int) -> Dict[str, AblationFn]:
+def _cord_ablation_suite(seed: int) -> Dict[str, AblationFn]:
     return {
         "drop_layout": _drop_field_ablation("layout"),
         "drop_text": _drop_field_ablation("text"),
-        "perturb_layout": _perturb_layout_ablation(scale=0.02),
-        "shuffle_entities": _shuffle_field_ablation("entity"),
-    }
-
-
-def _doclaynet_ablation_suite(seed: int) -> Dict[str, AblationFn]:
-    return {
-        "drop_layout": _drop_field_ablation("layout"),
-        "drop_text": _drop_field_ablation("text"),
-        "perturb_layout": _perturb_layout_ablation(scale=0.03),
-        "shuffle_segments": _shuffle_field_ablation("segment"),
+        "shuffle_lines": _shuffle_field_ablation("line"),
     }
 
 
@@ -1004,105 +940,68 @@ def _serialise_cell_fusion(fusion: Mapping[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _cord_prediction_factory(threshold: float) -> PredictFn:
+    def _predict(result: CompressionResult, document: Mapping[str, Any]) -> bool:
+        guess = _cord_guess_total(result)
+        if guess is None:
+            guess = cord_total_amount(document)
+        return float(guess or 0.0) >= float(threshold)
+
+    return _predict
+
+
+def _cord_guess_total(result: CompressionResult) -> Optional[float]:
+    best: Optional[float] = None
+    for field_name in ("text", "line"):
+        entries = result.compressed_fields.get(field_name, [])
+        candidate = _cord_max_amount(entries, prefer_field=field_name)
+        if candidate is None:
+            continue
+        if best is None or candidate > best:
+            best = candidate
+    return best
+
+
+def _cord_max_amount(
+    entries: Sequence[Any],
+    *,
+    prefer_field: str,
+) -> Optional[float]:
+    best: Optional[float] = None
+    for entry in entries:
+        if isinstance(entry, Mapping):
+            text_value = entry.get("text")
+            category = entry.get("category") or entry.get("line_category")
+        else:
+            text_value = entry
+            category = ""
+        amount = cord_amount_from_text(text_value)
+        if amount <= 0:
+            continue
+        weight = 1.0
+        category_text = str(category or "").lower()
+        if "total" in category_text:
+            weight = 1.4
+        elif prefer_field == "line":
+            weight = 1.15
+        candidate = amount * weight
+        if best is None or candidate > best:
+            best = candidate
+    return best
+
+
+def _cord_metadata(document: Mapping[str, Any], _: CompressionResult) -> Mapping[str, Any]:
+    return {
+        "doc_id": document.get("doc_id"),
+        "total_amount": cord_total_amount(document),
+        "line_count": len(document.get("lines", [])),
+    }
+
+
 def _copy_nested_list(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_copy_nested_list(item) for item in value]
     return value
-
-
-def _doclaynet_predict_contains_table(result: CompressionResult, _: Mapping[str, Any]) -> bool:
-    segments = result.compressed_fields.get("segment")
-    if segments is None:
-        segments = result.compressed_fields.get("region", [])
-    for segment in segments:
-        if isinstance(segment, Mapping):
-            label = (
-                segment.get("label")
-                or segment.get("segment_label")
-                or segment.get("region_label")
-            )
-        else:
-            label = segment
-        if isinstance(label, str) and label.lower() == "table":
-            return True
-    for token in result.compressed_fields.get("text", []):
-        value: Any
-        if isinstance(token, Mapping):
-            value = token.get("text")
-        else:
-            value = token
-        if isinstance(value, str) and "table" in value.lower():
-            return True
-    return False
-
-
-def _doclaynet_metadata(document: Mapping[str, Any], result: CompressionResult) -> Mapping[str, Any]:
-    doc_id = document.get("doc_id") or document.get("id")
-    segments = result.compressed_fields.get("segment")
-    if segments is None:
-        segments = result.compressed_fields.get("region", [])
-    kept_segments = []
-    for segment in segments:
-        if isinstance(segment, Mapping):
-            label = (
-                segment.get("label")
-                or segment.get("segment_label")
-                or segment.get("region_label")
-            )
-            segment_id = (
-                segment.get("segment_id")
-                if segment.get("segment_id") is not None
-                else segment.get("region_id")
-            )
-        else:
-            label = segment
-            segment_id = None
-        kept_segments.append(
-            {
-                "segment_id": segment_id,
-                "region_id": segment_id,
-                "label": str(label) if label is not None else "",
-            }
-        )
-
-    metadata = {
-        "doc_id": doc_id,
-        "contains_table": doclaynet_contains_table(document),
-        "kept_segments": kept_segments,
-        "kept_segment_count": len(kept_segments),
-    }
-    # Preserve legacy keys for downstream consumers expecting the old naming.
-    metadata["kept_regions"] = [
-        {"region_id": entry.get("region_id"), "label": entry.get("label", "")}
-        for entry in kept_segments
-    ]
-    metadata["kept_region_count"] = metadata["kept_segment_count"]
-    return metadata
-
-
-def _funsd_predict_numeric_answer(result: CompressionResult, _: Mapping[str, Any]) -> bool:
-    for entity in result.compressed_fields.get("entity", []):
-        if isinstance(entity, Mapping) and str(entity.get("label", "")).lower() == "answer":
-            text = entity.get("text", "")
-            if any(char.isdigit() for char in str(text)):
-                return True
-    for token in result.compressed_fields.get("text", []):
-        if not isinstance(token, Mapping):
-            continue
-        if token.get("is_answer") and any(char.isdigit() for char in str(token.get("text", ""))):
-            return True
-    return False
-
-
-def _funsd_metadata(document: Mapping[str, Any], _: CompressionResult) -> Mapping[str, Any]:
-    doc_id = document.get("doc_id") or document.get("id")
-    entities = document.get("form", [])
-    answer_count = sum(1 for item in entities if str(item.get("label", "")).lower() == "answer")
-    return {
-        "doc_id": doc_id,
-        "entity_count": len(entities),
-        "answer_entities": answer_count,
-    }
 
 
 def main() -> None:
@@ -1116,4 +1015,4 @@ if __name__ == "__main__":
     main()
 
 
-__all__ = ["run_benchmark", "run_funsd_benchmark", "run_doclaynet_benchmark"]
+__all__ = ["run_benchmark", "run_cord_benchmark"]

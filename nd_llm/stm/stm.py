@@ -198,6 +198,100 @@ class STM:
         matches = self.query(metadata_filter={"task": task}, limit=limit)
         return [key for key, _ in matches]
 
+    # ------------------------------------------------------------------
+    # Superposition helpers
+    # ------------------------------------------------------------------
+    def write_superposition(
+        self,
+        channel: str,
+        tensor: TensorLike,
+        *,
+        weight: float = 1.0,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> str:
+        """Accumulate ``tensor`` into the holographic superposition for ``channel``."""
+
+        if not channel:
+            raise ValueError("channel must be a non-empty string")
+        if weight == 0:
+            raise ValueError("weight must be non-zero")
+
+        nested = self._to_nested_structure(tensor)
+        shape = self._infer_shape(nested)
+        flat = self._flatten_nested(nested)
+        scaled = [float(weight) * value for value in flat]
+        metadata_dict = self._normalize_metadata(metadata)
+        metadata_dict.update({"superposition": True, "channel": str(channel)})
+        key = self._super_key(channel)
+
+        with self._lock:
+            entry = self._index.get(key)
+            if entry is None:
+                entry = self._build_index_entry(key, shape, len(flat), metadata_dict)
+                existing: List[float] = [0.0] * len(flat)
+                total_weight = 0.0
+            else:
+                existing = self._load_tensor_values(entry)
+                if len(existing) != len(scaled):
+                    raise ValueError(
+                        f"Superposition payload for channel '{channel}' has incompatible shape"
+                    )
+                total_weight = float(entry.get("metadata", {}).get("weight", 0.0))
+
+            combined = [current + delta for current, delta in zip(existing, scaled)]
+            total_weight += float(weight)
+
+            metadata_dict["weight"] = total_weight
+            entry["metadata"] = metadata_dict
+            entry["shape"] = list(shape)
+            entry["length"] = len(flat)
+            entry.update(self._derive_index_annotations(metadata_dict))
+
+            tensor_path = self._storage_dir / entry["tensor_file"]
+            tmp_path = tensor_path.with_suffix(".tmp")
+            payload = array("d", combined).tobytes()
+            compressed = zlib.compress(payload)
+            with tmp_path.open("wb") as fh:
+                fh.write(compressed)
+            tmp_path.replace(tensor_path)
+
+            self._index[key] = entry
+            self._save_index()
+        return key
+
+    def read_superposition(
+        self,
+        channel: str,
+        *,
+        normalize: bool = True,
+    ) -> tuple[List[float], Dict[str, Any]]:
+        """Return the accumulated tensor for ``channel`` and its metadata."""
+
+        key = self._super_key(channel)
+        with self._lock:
+            entry = self._index.get(key)
+            if entry is None:
+                raise KeyError(f"Superposition channel '{channel}' is empty")
+        values = self._load_tensor_values(entry)
+        metadata = json.loads(json.dumps(entry.get("metadata", {})))
+        weight = float(metadata.get("weight", 0.0) or 0.0)
+        if normalize and weight:
+            values = [value / weight for value in values]
+        return values, metadata
+
+    def superposition_channels(self) -> List[str]:
+        """List channels with active holographic superpositions."""
+
+        channels: List[str] = []
+        with self._lock:
+            for key, entry in self._index.items():
+                if key.startswith("__super__::"):
+                    metadata = entry.get("metadata", {})
+                    channel = metadata.get("channel") if isinstance(metadata, Mapping) else None
+                    if isinstance(channel, str):
+                        channels.append(channel)
+        return channels
+
     def list_by_layout(self, layout_signature: str, limit: Optional[int] = None) -> Sequence[str]:
         matches = self.query(metadata_filter={"layout_signature": layout_signature}, limit=limit)
         return [key for key, _ in matches]
@@ -237,6 +331,23 @@ class STM:
         safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
         digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
         return f"{safe_key}_{digest}.bin"
+
+    def _load_tensor_values(self, entry: Mapping[str, Any]) -> List[float]:
+        tensor_file = entry.get("tensor_file")
+        if not tensor_file:
+            return []
+        tensor_path = self._storage_dir / str(tensor_file)
+        if not tensor_path.exists():
+            return []
+        compressed = tensor_path.read_bytes()
+        buffer = zlib.decompress(compressed)
+        values_array = array("d")
+        values_array.frombytes(buffer)
+        return values_array.tolist()
+
+    @staticmethod
+    def _super_key(channel: str) -> str:
+        return f"__super__::{channel}"
 
     def _prepare_payload(self, tensor: TensorLike) -> tuple[bytes, Sequence[int], int]:
         nested = self._to_nested_structure(tensor)

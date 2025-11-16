@@ -334,6 +334,7 @@ class IBottleneck:
         scorer_config: Optional[Mapping[str, Any]] = None,
         learnable_scorer: Optional[nn.Module] = None,
         budget_allocator: Optional[BudgetAllocatorFn] = None,
+        mi_score_weight: float = 0.5,
     ) -> None:
         if target_budget <= 0:
             raise ValueError("target_budget must be positive")
@@ -353,6 +354,9 @@ class IBottleneck:
         self.learnable_scorer: Optional[nn.Module] = learnable_scorer
         self.scorer = scorer or self._resolve_objective(self.objective)
         self.budget_allocator = budget_allocator or RegistryAwareBudgetAllocator()
+        if mi_score_weight < 0.0 or mi_score_weight > 1.0:
+            raise ValueError("mi_score_weight must fall within [0, 1]")
+        self.mi_score_weight = float(mi_score_weight)
         self._score_tensors: Dict[str, Tensor] = {}
 
     def compress(
@@ -370,7 +374,9 @@ class IBottleneck:
         metadata = self._normalise_field_metadata(fields.keys(), field_specs, registry)
 
         encoded = self._encode_fields(fields, encoders)
-        scoring_context = context or {}
+        scoring_context = dict(context) if context else {}
+        if mi_proxy is not None:
+            scoring_context["__mi_proxy__"] = mi_proxy
         self._score_tensors.clear()
         gating_scores = self._compute_scores(encoded, metadata, scoring_context)
 
@@ -546,27 +552,121 @@ class IBottleneck:
     ) -> Dict[str, List[float]]:
         scores: Dict[str, List[float]] = {}
         for field, embeddings in encoded.items():
-            raw_scores = self.scorer(field, embeddings, metadata.get(field, {}), context)
-            tensor: Optional[Tensor] = None
-            if torch is not None and isinstance(raw_scores, torch.Tensor):
-                tensor = raw_scores.squeeze(-1) if raw_scores.ndim > 1 else raw_scores
-                if tensor.ndim != 1:
-                    raise ValueError(
-                        "learnable scorer must return a 1D tensor of per-token scores"
-                    )
-                field_scores = [float(v) for v in tensor.detach().cpu().tolist()]
-            else:
-                field_scores = [
-                    float(v) for v in cast(Sequence[float], raw_scores)
-                ]
-            if len(field_scores) != len(embeddings):
-                raise ValueError(
-                    f"scoring strategy returned {len(field_scores)} scores for {len(embeddings)} embeddings in field '{field}'"
-                )
-            if tensor is not None:
-                self._score_tensors[field] = tensor
+            field_scores = self._score_field(field, embeddings, metadata, context)
+            mi_scores = self._mi_scores(field, embeddings, context)
+            if mi_scores is not None:
+                field_scores = self._blend_scores(field_scores, mi_scores)
             scores[field] = field_scores
         return scores
+
+    def _score_field(
+        self,
+        field: str,
+        embeddings: Sequence[Sequence[float]],
+        metadata: Mapping[str, FieldMetadata],
+        context: Mapping[str, Any],
+    ) -> List[float]:
+        raw_scores = self.scorer(field, embeddings, metadata.get(field, {}), context)
+        tensor: Optional[Tensor] = None
+        if torch is not None and isinstance(raw_scores, torch.Tensor):
+            tensor = raw_scores.squeeze(-1) if raw_scores.ndim > 1 else raw_scores
+            if tensor.ndim != 1:
+                raise ValueError("learnable scorer must return a 1D tensor of per-token scores")
+            field_scores = [float(v) for v in tensor.detach().cpu().tolist()]
+        else:
+            field_scores = [float(v) for v in cast(Sequence[float], raw_scores)]
+        if len(field_scores) != len(embeddings):
+            raise ValueError(
+                f"scoring strategy returned {len(field_scores)} scores for {len(embeddings)} embeddings in field '{field}'"
+            )
+        if tensor is not None and torch is not None:
+            self._score_tensors[field] = tensor
+        return field_scores
+
+    def _mi_scores(
+        self,
+        field: str,
+        embeddings: Sequence[Sequence[float]],
+        context: Mapping[str, Any],
+    ) -> Optional[List[float]]:
+        if self.mi_score_weight <= 0.0:
+            return None
+        if torch is None:
+            return None
+        if not embeddings:
+            return None
+        mi_proxy = context.get("__mi_proxy__")
+        if mi_proxy is None:
+            return None
+        targets = context.get("mi_targets") or context.get("target_embeddings")
+        if not isinstance(targets, Mapping):
+            return None
+        target_vector = targets.get(field)
+        if target_vector is None:
+            return None
+        try:
+            param = next(mi_proxy.parameters())
+        except StopIteration:  # pragma: no cover - MIProxy always defines params
+            param = None
+        if param is None:
+            device = torch.device("cpu")
+            dtype = torch.float32
+        else:
+            device = param.device
+            dtype = param.dtype
+        try:
+            token_tensor = torch.as_tensor(embeddings, device=device, dtype=dtype)
+        except Exception:
+            return None
+        if token_tensor.ndim != 2 or token_tensor.size(1) == 0:
+            return None
+        target_tensor = torch.as_tensor(target_vector, device=device, dtype=dtype)
+        if target_tensor.ndim != 1:
+            target_tensor = target_tensor.view(-1)
+        with torch.no_grad():
+            token_proj = mi_proxy.f(token_tensor)
+            target_proj = mi_proxy.h(target_tensor.unsqueeze(0)).squeeze(0)
+            if target_proj.ndim == 0:
+                target_proj = target_proj.unsqueeze(0)
+            token_proj = self._normalize_tensor(token_proj)
+            target_proj = self._normalize_tensor(target_proj.unsqueeze(0)).squeeze(0)
+            sims = torch.matmul(token_proj, target_proj)
+            tau = float(getattr(mi_proxy, "tau", 1.0) or 1.0)
+            sims = sims / tau
+        return sims.detach().cpu().tolist()
+
+    @staticmethod
+    def _normalize_tensor(values: Tensor) -> Tensor:
+        norm = torch.linalg.norm(values, dim=-1, keepdim=True)
+        norm = norm.clamp_min(1e-6)
+        return values / norm
+
+    def _blend_scores(self, base: Sequence[float], mi: Sequence[float]) -> List[float]:
+        if not base:
+            return list(mi)
+        if len(base) != len(mi):
+            return list(base)
+        weight = self.mi_score_weight
+        if weight >= 1.0:
+            return list(mi)
+        if weight <= 0.0:
+            return list(base)
+        base_norm = self._standardize_scores(base)
+        mi_norm = self._standardize_scores(mi)
+        blended = [
+            (1.0 - weight) * b + weight * m
+            for b, m in zip(base_norm, mi_norm)
+        ]
+        return blended
+
+    @staticmethod
+    def _standardize_scores(values: Sequence[float]) -> List[float]:
+        if not values:
+            return []
+        mean = sum(values) / float(len(values))
+        variance = sum((value - mean) ** 2 for value in values) / float(len(values))
+        std = math.sqrt(variance) or 1.0
+        return [(value - mean) / std for value in values]
 
     def _select_indices(
         self,
