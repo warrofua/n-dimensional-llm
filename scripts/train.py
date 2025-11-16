@@ -27,16 +27,34 @@ from scripts.common import (
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
-    parser.add_argument("--dataset-size", type=int, default=24, help="Synthetic dataset size")
-    parser.add_argument("--threshold", type=float, default=500.0, help="Invoice amount threshold")
-    parser.add_argument("--budget", type=int, default=8, help="Token budget for the bottleneck")
-    parser.add_argument("--alpha", type=float, default=1e-4, help="Rate penalty coefficient")
-    parser.add_argument("--beta", type=float, default=0.1, help="Mutual-information weight")
-    parser.add_argument("--lr", type=float, default=1e-3, help="Optimizer learning rate")
+    parser.add_argument(
+        "--epochs", type=int, default=3, help="Number of training epochs"
+    )
+    parser.add_argument(
+        "--dataset-size", type=int, default=24, help="Synthetic dataset size"
+    )
+    parser.add_argument(
+        "--threshold", type=float, default=500.0, help="Invoice amount threshold"
+    )
+    parser.add_argument(
+        "--budget", type=int, default=8, help="Token budget for the bottleneck"
+    )
+    parser.add_argument(
+        "--alpha", type=float, default=1e-4, help="Rate penalty coefficient"
+    )
+    parser.add_argument(
+        "--beta", type=float, default=0.1, help="Mutual-information weight"
+    )
+    parser.add_argument(
+        "--lr", type=float, default=1e-3, help="Optimizer learning rate"
+    )
     parser.add_argument("--batch-size", type=int, default=2, help="Mini-batch size")
-    parser.add_argument("--hidden-dim", type=int, default=128, help="Model hidden dimension")
-    parser.add_argument("--seed", type=int, default=0, help="Random seed for dataset generation")
+    parser.add_argument(
+        "--hidden-dim", type=int, default=128, help="Model hidden dimension"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=0, help="Random seed for dataset generation"
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -70,7 +88,9 @@ def _compute_loss(
         rate_pen = torch.tensor(rate_pen, dtype=logits.dtype, device=logits.device)
     mi_tensor = logs.get("mi_lb_tensor")
     if not isinstance(mi_tensor, torch.Tensor):
-        mi_tensor = torch.tensor(float(logs.get("mi_lb", 0.0)), dtype=logits.dtype, device=logits.device)
+        mi_tensor = torch.tensor(
+            float(logs.get("mi_lb", 0.0)), dtype=logits.dtype, device=logits.device
+        )
     mi_term = -float(beta) * mi_tensor
     loss = ce + rate_pen + mi_term
     metrics = {
@@ -113,7 +133,11 @@ def _train_epoch(
         optimizer.zero_grad()
         logits, logs = model(batch, token_budget=budget)
         targets = logs.get("targets")
-        if targets is None or not isinstance(targets, torch.Tensor) or targets.numel() == 0:
+        if (
+            targets is None
+            or not isinstance(targets, torch.Tensor)
+            or targets.numel() == 0
+        ):
             continue
         loss, parts = _compute_loss(logits, targets, logs, alpha=alpha, beta=beta)
         loss.backward()
@@ -192,15 +216,21 @@ def main(argv: Optional[Sequence[str]] = None) -> Dict[str, Any]:
         budget_text = ""
         weight_text = ""
         if isinstance(budget_summary, Mapping) and budget_summary:
-            parts = [f"{field}:{value:.2f}" for field, value in sorted(budget_summary.items())]
+            parts = [
+                f"{field}:{value:.2f}"
+                for field, value in sorted(budget_summary.items())
+            ]
             budget_text = f" budgets=[{', '.join(parts)}]"
         if isinstance(weight_summary, Mapping) and weight_summary:
-            parts = [f"{field}:{value:.2f}" for field, value in sorted(weight_summary.items())]
+            parts = [
+                f"{field}:{value:.2f}"
+                for field, value in sorted(weight_summary.items())
+            ]
             weight_text = f" alloc=[{', '.join(parts)}]"
         print(
             f"epoch {epoch}: loss={epoch_metrics['loss']:.4f} ce={epoch_metrics['ce']:.4f} "
             f"rate={epoch_metrics['rate']:.4f} mi_lb={epoch_metrics['mi_lb']:.4f} "
-            f"acc={epoch_metrics['accuracy']:.3f} tokens={epoch_metrics['tokens']:.3f}" \
+            f"acc={epoch_metrics['accuracy']:.3f} tokens={epoch_metrics['tokens']:.3f}"
             f"{budget_text}{weight_text}"
         )
 

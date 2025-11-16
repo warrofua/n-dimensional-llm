@@ -1,4 +1,5 @@
 """Encoder protocol and concrete stubs for ND-LLM."""
+
 from __future__ import annotations
 
 import hashlib
@@ -38,7 +39,9 @@ class TextEncoder:
         embeddings: list[list[float]] = []
         for item in field_batch:
             text = "" if item is None else str(item)
-            embeddings.append(_hash_to_unit_float(text.encode("utf-8"), self.embedding_dim))
+            embeddings.append(
+                _hash_to_unit_float(text.encode("utf-8"), self.embedding_dim)
+            )
         return embeddings
 
 
@@ -62,7 +65,9 @@ class LayoutEncoder:
             for key in ("x1", "y1", "x2", "y2", "width", "height", "x", "y"):
                 if key in item:
                     values.append(float(item[key]))
-        elif isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+        elif isinstance(item, Sequence) and not isinstance(
+            item, (str, bytes, bytearray)
+        ):
             values.extend(float(v) for v in item[: self.embedding_dim])
 
         if not values:

@@ -18,7 +18,9 @@ def _assert_budget_payload(entry: dict) -> None:
 
 
 def test_long_qa_benchmark_smoke() -> None:
-    report = run_long_qa_benchmark(budget_values=(5,), dataset_size=4, seed=1, num_turns=4)
+    report = run_long_qa_benchmark(
+        budget_values=(5,), dataset_size=4, seed=1, num_turns=4
+    )
 
     assert report["dataset"] == "synthetic-long-qa"
     assert report["dataset_size"] == 4
@@ -30,7 +32,9 @@ def test_long_qa_benchmark_smoke() -> None:
 
 
 def test_video_qa_benchmark_smoke() -> None:
-    report = run_video_qa_benchmark(budget_values=(6,), dataset_size=3, seed=2, num_frames=5)
+    report = run_video_qa_benchmark(
+        budget_values=(6,), dataset_size=3, seed=2, num_frames=5
+    )
 
     assert report["dataset"] == "synthetic-video-qa"
     assert report["dataset_size"] == 3

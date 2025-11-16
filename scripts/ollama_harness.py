@@ -5,25 +5,22 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import textwrap
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Sequence
 
 from benchmarks.cord import (
     build_cord_encoders,
     build_cord_registry,
     cord_fields,
-    cord_high_total_label,
     cord_total_amount,
     load_cord_dataset,
 )
 from benchmarks.chartqa import (
     build_chartqa_encoders,
     build_chartqa_registry,
-    chartqa_answer,
     chartqa_fields,
     load_chartqa_dataset,
 )
@@ -97,7 +94,9 @@ def load_document(args: argparse.Namespace) -> tuple[Mapping[str, Any], str]:
             data_root=args.data_root,
         )
         if not docs:
-            raise RuntimeError("No CORD documents available for the requested configuration.")
+            raise RuntimeError(
+                "No CORD documents available for the requested configuration."
+            )
         return docs[0], "cord"
     docs = load_chartqa_dataset(
         split="test",
@@ -106,11 +105,15 @@ def load_document(args: argparse.Namespace) -> tuple[Mapping[str, Any], str]:
         cache_dir=args.data_root,
     )
     if not docs:
-        raise RuntimeError("No ChartQA documents available for the requested configuration.")
+        raise RuntimeError(
+            "No ChartQA documents available for the requested configuration."
+        )
     return docs[0], "chartqa"
 
 
-def compress_document(document: Mapping[str, Any], dataset: str, budget: int) -> tuple[Any, Mapping[str, Any]]:
+def compress_document(
+    document: Mapping[str, Any], dataset: str, budget: int
+) -> tuple[Any, Mapping[str, Any]]:
     if dataset == "cord":
         registry = build_cord_registry()
         build_cord_encoders(registry)
@@ -119,9 +122,13 @@ def compress_document(document: Mapping[str, Any], dataset: str, budget: int) ->
         registry = build_chartqa_registry()
         build_chartqa_encoders(registry)
         fields = chartqa_fields(document)
-    mi_proxy, mi_context = build_mi_proxy_context(fields, registry.encoders, preferred_fields=tuple(fields))
+    mi_proxy, mi_context = build_mi_proxy_context(
+        fields, registry.encoders, preferred_fields=tuple(fields)
+    )
     bottleneck = IBottleneck(target_budget=int(budget))
-    result = bottleneck.compress(fields, encoders=registry.encoders, context=mi_context, mi_proxy=mi_proxy)
+    result = bottleneck.compress(
+        fields, encoders=registry.encoders, context=mi_context, mi_proxy=mi_proxy
+    )
     return result, fields
 
 
@@ -154,12 +161,16 @@ def build_prompt(
         for row in result.compressed_fields.get("chart", [])
         if isinstance(row, Mapping)
     ]
-    chart_summary = kept_rows or [f"{row.get('label')}: {row.get('value')}" for row in chart_rows[:4]]
+    chart_summary = kept_rows or [
+        f"{row.get('label')}: {row.get('value')}" for row in chart_rows[:4]
+    ]
     return textwrap.dedent(
-        f"""
+        """
         You are answering a question about a chart. Selected chart entries:
 
-        - """[1:]
+        - """[
+            1:
+        ]
         + "\n- ".join(chart_summary)
         + textwrap.dedent(
             f"""
@@ -187,7 +198,9 @@ def _collect_tokens(entries: Sequence[Any]) -> str:
 
 
 def call_ollama(model: str, prompt: str, url: str) -> Dict[str, Any]:
-    payload = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode("utf-8")
+    payload = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode(
+        "utf-8"
+    )
     request = urllib.request.Request(
         f"{url.rstrip('/')}/api/generate",
         data=payload,

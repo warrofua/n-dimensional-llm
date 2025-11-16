@@ -116,7 +116,9 @@ class STM:
             tensor_path = self._storage_dir / entry["tensor_file"]
 
         if not tensor_path.exists():
-            raise FileNotFoundError(f"Tensor payload missing for key '{key}' at {tensor_path}")
+            raise FileNotFoundError(
+                f"Tensor payload missing for key '{key}' at {tensor_path}"
+            )
 
         compressed = tensor_path.read_bytes()
         buffer = zlib.decompress(compressed)
@@ -183,15 +185,21 @@ class STM:
         results: list[tuple[str, Dict[str, Any]]] = []
         for key, entry in items:
             metadata = entry.get("metadata", {})
-            if metadata_filter and not self._metadata_matches(metadata, metadata_filter):
+            if metadata_filter and not self._metadata_matches(
+                metadata, metadata_filter
+            ):
                 continue
             results.append((key, json.loads(json.dumps(entry))))
             if limit is not None and len(results) >= limit:
                 break
         return results
 
-    def list_by_alignment(self, alignment_key: str, limit: Optional[int] = None) -> Sequence[str]:
-        matches = self.query(metadata_filter={"alignment_key": alignment_key}, limit=limit)
+    def list_by_alignment(
+        self, alignment_key: str, limit: Optional[int] = None
+    ) -> Sequence[str]:
+        matches = self.query(
+            metadata_filter={"alignment_key": alignment_key}, limit=limit
+        )
         return [key for key, _ in matches]
 
     def list_by_task(self, task: str, limit: Optional[int] = None) -> Sequence[str]:
@@ -287,13 +295,21 @@ class STM:
             for key, entry in self._index.items():
                 if key.startswith("__super__::"):
                     metadata = entry.get("metadata", {})
-                    channel = metadata.get("channel") if isinstance(metadata, Mapping) else None
+                    channel = (
+                        metadata.get("channel")
+                        if isinstance(metadata, Mapping)
+                        else None
+                    )
                     if isinstance(channel, str):
                         channels.append(channel)
         return channels
 
-    def list_by_layout(self, layout_signature: str, limit: Optional[int] = None) -> Sequence[str]:
-        matches = self.query(metadata_filter={"layout_signature": layout_signature}, limit=limit)
+    def list_by_layout(
+        self, layout_signature: str, limit: Optional[int] = None
+    ) -> Sequence[str]:
+        matches = self.query(
+            metadata_filter={"layout_signature": layout_signature}, limit=limit
+        )
         return [key for key, _ in matches]
 
     def __contains__(self, key: str) -> bool:
@@ -363,7 +379,9 @@ class STM:
             return tensor.detach().cpu().tolist()
         if isinstance(tensor, (list, tuple)):
             return [self._to_nested_structure(item) for item in tensor]
-        if isinstance(tensor, Iterable) and not isinstance(tensor, (str, bytes, bytearray)):
+        if isinstance(tensor, Iterable) and not isinstance(
+            tensor, (str, bytes, bytearray)
+        ):
             return [self._to_nested_structure(item) for item in list(tensor)]
         if isinstance(tensor, (int, float)):
             return float(tensor)
@@ -389,7 +407,9 @@ class STM:
             return flattened
         return [float(value)]
 
-    def _reshape_from_iter(self, iterator: Iterator[float], shape: Sequence[int]) -> Any:
+    def _reshape_from_iter(
+        self, iterator: Iterator[float], shape: Sequence[int]
+    ) -> Any:
         if not shape:
             try:
                 return next(iterator)
@@ -400,7 +420,9 @@ class STM:
         result = [self._reshape_from_iter(iterator, remainder) for _ in range(size)]
         return result
 
-    def _normalize_metadata(self, metadata: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    def _normalize_metadata(
+        self, metadata: Optional[Mapping[str, Any]]
+    ) -> Dict[str, Any]:
         if metadata is None:
             metadata_dict: Dict[str, Any] = {}
         else:
@@ -435,7 +457,9 @@ class STM:
 
     def _derive_index_annotations(self, metadata: Mapping[str, Any]) -> Dict[str, Any]:
         annotations: Dict[str, Any] = {}
-        compression_data = metadata.get("compression") if isinstance(metadata, Mapping) else None
+        compression_data = (
+            metadata.get("compression") if isinstance(metadata, Mapping) else None
+        )
         if isinstance(compression_data, Mapping):
             summary = compression_data.get("summary")
             if isinstance(summary, Mapping):
@@ -473,6 +497,7 @@ class STM:
 
             idx_cells = compression_data.get("idx_cells")
             if isinstance(idx_cells, Mapping):
+
                 def _normalise_index_map(value: Any) -> Dict[str, List[int]]:
                     if not isinstance(value, Mapping):
                         return {}
@@ -481,7 +506,11 @@ class STM:
                         normalised: List[int] = []
                         if isinstance(entries, Mapping):
                             entries = entries.values()
-                        for raw in (entries if isinstance(entries, (list, tuple, set, frozenset)) else [entries]):
+                        for raw in (
+                            entries
+                            if isinstance(entries, (list, tuple, set, frozenset))
+                            else [entries]
+                        ):
                             try:
                                 normalised.append(int(raw))
                             except (TypeError, ValueError):
@@ -505,7 +534,9 @@ class STM:
                         if isinstance(values, Mapping):
                             values = values.values()
                         if isinstance(values, (list, tuple, set, frozenset)):
-                            serialised = [str(item) for item in values if item is not None]
+                            serialised = [
+                                str(item) for item in values if item is not None
+                            ]
                         elif values is None:
                             serialised = []
                         else:
@@ -532,7 +563,9 @@ class STM:
             if isinstance(mi_lb, (int, float)):
                 annotations["mi_lb"] = float(mi_lb)
 
-        alignment_key = metadata.get("alignment_key") if isinstance(metadata, Mapping) else None
+        alignment_key = (
+            metadata.get("alignment_key") if isinstance(metadata, Mapping) else None
+        )
         if isinstance(alignment_key, str):
             annotations["alignment_key"] = alignment_key
 
@@ -555,7 +588,9 @@ class STM:
         tmp_path.replace(self._index_path)
 
 
-def _canonical_layout_signature(canonical: Mapping[str, Sequence[Any]]) -> Optional[str]:
+def _canonical_layout_signature(
+    canonical: Mapping[str, Sequence[Any]]
+) -> Optional[str]:
     parts: list[str] = []
     for field in sorted(canonical):
         values = canonical[field]

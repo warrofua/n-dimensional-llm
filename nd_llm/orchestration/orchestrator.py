@@ -23,6 +23,7 @@ from nd_llm.orchestration.budget import (
 from nd_llm.stm import STM, TensorLike
 from nd_llm.utils.config import OrchestratorConfig
 
+
 def _to_serialisable(value: Any) -> Any:
     """Convert values to JSON-serialisable structures."""
 
@@ -51,7 +52,9 @@ def _iterable_to_list(value: Any) -> List[Any]:
         return list(value)
     if isinstance(value, set):
         return [item for item in value]
-    if isinstance(value, SequenceABC) and not isinstance(value, (str, bytes, bytearray)):
+    if isinstance(value, SequenceABC) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
         return list(value)
     return []
 
@@ -166,7 +169,9 @@ class HeuristicBudgetMetaModel(BudgetMetaModel):
         info_max = self._coerce_float(features.get("max_information_bound", info_mean))
         info_score = (info_mean + info_max) / 2.0 if info_max else info_mean
 
-        field_information = self._normalise_mapping(features.get("field_information", {}))
+        field_information = self._normalise_mapping(
+            features.get("field_information", {})
+        )
         candidate_field_info = {}
         metadata_field_info = None
         if isinstance(candidate.metadata, Mapping):
@@ -183,7 +188,9 @@ class HeuristicBudgetMetaModel(BudgetMetaModel):
                 value = info_mean
             if value is not None:
                 field_scores.append(self._coerce_float(value))
-        field_score = sum(field_scores) / len(field_scores) if field_scores else info_score
+        field_score = (
+            sum(field_scores) / len(field_scores) if field_scores else info_score
+        )
 
         utilisation_samples: List[float] = []
         for observation in observations:
@@ -197,9 +204,15 @@ class HeuristicBudgetMetaModel(BudgetMetaModel):
             mean_ratio = self._coerce_float(features.get("mean_compression_ratio", 0.0))
             if mean_ratio:
                 utilisation_samples.append(mean_ratio)
-        utilisation = sum(utilisation_samples) / len(utilisation_samples) if utilisation_samples else 0.0
+        utilisation = (
+            sum(utilisation_samples) / len(utilisation_samples)
+            if utilisation_samples
+            else 0.0
+        )
 
-        tokens_retained_mean = self._coerce_float(features.get("mean_tokens_retained", 0.0))
+        tokens_retained_mean = self._coerce_float(
+            features.get("mean_tokens_retained", 0.0)
+        )
         budget_mean = self._coerce_float(features.get("budget_mean", 0.0))
         estimated_need = tokens_retained_mean or budget_mean
         if not estimated_need:
@@ -210,7 +223,9 @@ class HeuristicBudgetMetaModel(BudgetMetaModel):
 
         difference_ratio = 0.0
         if estimated_need > 0:
-            difference_ratio = abs(float(candidate.budget) - estimated_need) / max(estimated_need, 1.0)
+            difference_ratio = abs(float(candidate.budget) - estimated_need) / max(
+                estimated_need, 1.0
+            )
         balance = 1.0 - min(difference_ratio, 1.0)
         balance = max(self.min_balance, balance)
 
@@ -221,18 +236,31 @@ class HeuristicBudgetMetaModel(BudgetMetaModel):
         history_factor = 1.0 + self.history_weight * (min(len(history), 10) / 10.0)
         diversity_factor = 1.0
         if candidate.fields:
-            diversity_factor += self.diversity_weight * math.log1p(len(candidate.fields))
+            diversity_factor += self.diversity_weight * math.log1p(
+                len(candidate.fields)
+            )
 
         pressure = max(0.0, utilisation - 0.75)
         pressure_factor = 1.0 + self.pressure_weight * pressure
 
         score_core = info_strength + field_strength + utilisation_strength
         if score_core <= 0:
-            score_core = utilisation_strength + len(history) * 0.05 + len(candidate.fields) * 0.01
+            score_core = (
+                utilisation_strength
+                + len(history) * 0.05
+                + len(candidate.fields) * 0.01
+            )
 
         budget = max(float(candidate.budget), 1e-3)
 
-        score = score_core * history_factor * diversity_factor * pressure_factor * balance * budget
+        score = (
+            score_core
+            * history_factor
+            * diversity_factor
+            * pressure_factor
+            * balance
+            * budget
+        )
         return float(score)
 
     @staticmethod
@@ -252,6 +280,7 @@ class HeuristicBudgetMetaModel(BudgetMetaModel):
             except (TypeError, ValueError):
                 continue
         return result
+
 
 @dataclass
 class CompressionRecord:
@@ -286,7 +315,9 @@ class CompressionRecord:
             for stats in residual_stats.values():
                 if isinstance(stats, Mapping):
                     try:
-                        regenerated_total += float(stats.get("dropped_count", 0.0) or 0.0)
+                        regenerated_total += float(
+                            stats.get("dropped_count", 0.0) or 0.0
+                        )
                     except (TypeError, ValueError):
                         continue
             if regenerated_total:
@@ -308,22 +339,15 @@ class CompressionRecord:
 
     def as_metadata(self) -> Dict[str, Any]:
         serialised_fields: Dict[str, List[Any]] = {
-            str(field): [
-                _to_serialisable(item)
-                for item in _iterable_to_list(sequence)
-            ]
+            str(field): [_to_serialisable(item) for item in _iterable_to_list(sequence)]
             for field, sequence in self.compressed_fields.items()
         }
         telemetry_map = self.telemetry if isinstance(self.telemetry, Mapping) else {}
-        metrics_map = {
-            str(name): float(value)
-            for name, value in self.metrics.items()
-        }
+        metrics_map = {str(name): float(value) for name, value in self.metrics.items()}
         summary = self.summary()
 
         field_counts = {
-            field: len(entries)
-            for field, entries in serialised_fields.items()
+            field: len(entries) for field, entries in serialised_fields.items()
         }
         pipeline: Dict[str, Any] = {}
         if self.bottleneck is not None:
@@ -471,7 +495,12 @@ class CompressionRecord:
         fields: Mapping[str, Sequence[Any]],
     ) -> Dict[str, Any]:
         artifacts: Dict[str, Any] = {}
-        for key in ("artifacts", "cell_artifacts", "rasterized_cells", "canonical_cells"):
+        for key in (
+            "artifacts",
+            "cell_artifacts",
+            "rasterized_cells",
+            "canonical_cells",
+        ):
             value = telemetry.get(key)
             if value is not None:
                 artifacts[str(key)] = _to_serialisable(value)
@@ -509,10 +538,12 @@ class CompressionRecord:
                 tokens_batch.append(embedding)
                 coords_batch.append(coords)
             if tokens_batch and len(tokens_batch) == len(coords_batch):
-                field_batches.append({
-                    "tokens": [tokens_batch],
-                    "coords": [coords_batch],
-                })
+                field_batches.append(
+                    {
+                        "tokens": [tokens_batch],
+                        "coords": [coords_batch],
+                    }
+                )
 
         if not field_batches:
             return None
@@ -576,15 +607,22 @@ class CompressionRecord:
             return [[[_coerce_float(component) for component in centres]]]
         if centres and isinstance(centres[0], list):
             if centres[0] and isinstance(centres[0][0], (int, float)):
-                return [[[_coerce_float(component) for component in centre] for centre in centres]]
+                return [
+                    [
+                        [_coerce_float(component) for component in centre]
+                        for centre in centres
+                    ]
+                ]
             normalised: List[Any] = []
             for batch in centres:
                 batch_list = _iterable_to_list(batch)
-                normalised.append([
-                    [_coerce_float(component) for component in centre]
-                    for centre in batch_list
-                    if isinstance(centre, (list, tuple))
-                ])
+                normalised.append(
+                    [
+                        [_coerce_float(component) for component in centre]
+                        for centre in batch_list
+                        if isinstance(centre, (list, tuple))
+                    ]
+                )
             return normalised
         return []
 
@@ -598,19 +636,27 @@ class CompressionRecord:
         selected_indices: Dict[str, List[int]] = {}
         if isinstance(selected_indices_raw, Mapping):
             for field, indices in selected_indices_raw.items():
-                selected_indices[str(field)] = [_coerce_int(i) for i in _iterable_to_list(indices)]
+                selected_indices[str(field)] = [
+                    _coerce_int(i) for i in _iterable_to_list(indices)
+                ]
 
         selected_scores: Dict[str, List[float]] = {}
         if isinstance(selected_scores_raw, Mapping):
             for field, scores in selected_scores_raw.items():
-                selected_scores[str(field)] = [_coerce_float(score) for score in _iterable_to_list(scores)]
+                selected_scores[str(field)] = [
+                    _coerce_float(score) for score in _iterable_to_list(scores)
+                ]
 
         token_counts: Dict[str, int] = {}
         if isinstance(token_counts_raw, Mapping):
             for field, count in token_counts_raw.items():
                 token_counts[str(field)] = _coerce_int(count)
 
-        budget = int(budget_raw) if isinstance(budget_raw, (int, float)) else sum(token_counts.values())
+        budget = (
+            int(budget_raw)
+            if isinstance(budget_raw, (int, float))
+            else sum(token_counts.values())
+        )
 
         field_budgets_raw = telemetry.get("field_budgets", {})
         field_budgets: Dict[str, int] = {}
@@ -628,7 +674,9 @@ class CompressionRecord:
         dropped_indices: Dict[str, List[int]] = {}
         if isinstance(dropped_indices_raw, Mapping):
             for field, indices in dropped_indices_raw.items():
-                dropped_indices[str(field)] = [_coerce_int(i) for i in _iterable_to_list(indices)]
+                dropped_indices[str(field)] = [
+                    _coerce_int(i) for i in _iterable_to_list(indices)
+                ]
 
         residual_stats_raw = telemetry.get("residual_statistics", {})
         residual_statistics: Dict[str, Dict[str, float]] = {}
@@ -636,8 +684,7 @@ class CompressionRecord:
             for field, stats in residual_stats_raw.items():
                 if isinstance(stats, Mapping):
                     residual_statistics[str(field)] = {
-                        str(name): _coerce_float(value)
-                        for name, value in stats.items()
+                        str(name): _coerce_float(value) for name, value in stats.items()
                     }
 
         quantized_embeddings_raw = telemetry.get("quantized_embeddings", {})
@@ -661,7 +708,9 @@ class CompressionRecord:
                         scale = 1.0
                     normalised_entries.append(
                         {
-                            "index": _coerce_int(entry.get("index", len(normalised_entries))),
+                            "index": _coerce_int(
+                                entry.get("index", len(normalised_entries))
+                            ),
                             "values": values,
                             "scale": scale,
                         }
@@ -723,7 +772,9 @@ class CompressionRecord:
                 for field, sequence in _ensure_mapping(compressed_fields).items()
             },
             telemetry=_ensure_mapping(telemetry),
-            metrics={str(name): float(val) for name, val in _ensure_mapping(metrics).items()},
+            metrics={
+                str(name): float(val) for name, val in _ensure_mapping(metrics).items()
+            },
             bottleneck=str(bottleneck) if bottleneck is not None else None,
             policy_metadata=policy_metadata,
             probe_outcomes=_ensure_sequence_mapping(probe_outcomes_raw),
@@ -763,7 +814,8 @@ class CompressionRecord:
             telemetry=telemetry_payload,
             metrics=result.metrics,
             bottleneck=bottleneck_name,
-            policy_metadata={str(k): v for k, v in dict(policy_metadata or {}).items()} or None,
+            policy_metadata={str(k): v for k, v in dict(policy_metadata or {}).items()}
+            or None,
             probe_outcomes=[
                 {str(k): v for k, v in dict(outcome).items()}
                 for outcome in list(probe_outcomes or [])
@@ -925,7 +977,11 @@ class Orchestrator:
                 }
                 combined = existing[:]
                 for outcome in self._recent_probe_outcomes:
-                    outcome_id = str(outcome.get("id")) if outcome.get("id") is not None else None
+                    outcome_id = (
+                        str(outcome.get("id"))
+                        if outcome.get("id") is not None
+                        else None
+                    )
                     if outcome_id is None or outcome_id not in seen_ids:
                         combined.append(dict(outcome))
                         if outcome_id is not None:
@@ -954,7 +1010,11 @@ class Orchestrator:
                     if value is not None and field not in metadata:
                         metadata[field] = value
             telemetry = merged_compression.get("telemetry", {})
-            if isinstance(telemetry, Mapping) and "budget" in telemetry and "compression_budget" not in metadata:
+            if (
+                isinstance(telemetry, Mapping)
+                and "budget" in telemetry
+                and "compression_budget" not in metadata
+            ):
                 metadata["compression_budget"] = telemetry["budget"]
 
             idx_cells = merged_compression.get("idx_cells", {})
@@ -984,7 +1044,9 @@ class Orchestrator:
 
         constraint_results = self._evaluate_constraints(event)
         if constraint_results:
-            metadata["constraints"] = [result.to_dict() for result in constraint_results]
+            metadata["constraints"] = [
+                result.to_dict() for result in constraint_results
+            ]
             if any(not result.satisfied for result in constraint_results):
                 issues = metadata.setdefault("issues", [])
                 for result in constraint_results:
@@ -997,7 +1059,9 @@ class Orchestrator:
                             }
                         )
 
-        metadata.setdefault("task", metadata.get("policy_name", self._config.policy_name))
+        metadata.setdefault(
+            "task", metadata.get("policy_name", self._config.policy_name)
+        )
 
         attempt_key = base_key
         duplicate_attempts = 0
@@ -1016,7 +1080,9 @@ class Orchestrator:
         self._usage_log.append(attempt_key)
         return attempt_key
 
-    def budget_sweep(self, budget_values: Optional[Iterable[float]] = None) -> Dict[float, Dict[str, Any]]:
+    def budget_sweep(
+        self, budget_values: Optional[Iterable[float]] = None
+    ) -> Dict[float, Dict[str, Any]]:
         """Perform a simple sweep across potential budget values."""
 
         if budget_values is None:
@@ -1047,7 +1113,9 @@ class Orchestrator:
         """Adjust the orchestrator budget based on recent telemetry observations."""
 
         snapshots = self._collect_record_snapshots(window=window)
-        observations = self._collect_budget_observations(window=window, snapshots=snapshots)
+        observations = self._collect_budget_observations(
+            window=window, snapshots=snapshots
+        )
         history_features = self._build_history_features(snapshots, observations)
         if strategy is None:
             strategy = CompressionRatioBudgetStrategy(step=self._config.budget_step)
@@ -1067,7 +1135,9 @@ class Orchestrator:
         meta_summary: Optional[Dict[str, Any]] = None
         if meta_model and snapshots:
             field_sets = self._infer_candidate_field_sets(snapshots)
-            candidate_budgets = self._candidate_budgets(decision.proposed_budget, snapshots)
+            candidate_budgets = self._candidate_budgets(
+                decision.proposed_budget, snapshots
+            )
             history_records = [record for _, record, _ in snapshots]
             evaluations: List[Dict[str, Any]] = []
             best_evaluation: Optional[Dict[str, Any]] = None
@@ -1076,13 +1146,19 @@ class Orchestrator:
                 for budget in candidate_budgets:
                     candidate_metadata = {
                         "history_record_count": history_features.get("record_count", 0),
-                        "mean_information_bound": history_features.get("mean_information_bound", 0.0),
+                        "mean_information_bound": history_features.get(
+                            "mean_information_bound", 0.0
+                        ),
                         "field_information": {
-                            field: history_features.get("field_information", {}).get(field, 0.0)
+                            field: history_features.get("field_information", {}).get(
+                                field, 0.0
+                            )
                             for field in fields
                         },
                     }
-                    candidate = BudgetCandidate(fields=fields, budget=budget, metadata=candidate_metadata)
+                    candidate = BudgetCandidate(
+                        fields=fields, budget=budget, metadata=candidate_metadata
+                    )
 
                     try:
                         score = float(
@@ -1094,11 +1170,15 @@ class Orchestrator:
                             )
                         )
                     except Exception:
-                        score = float(self._fallback_candidate_score(candidate, snapshots))
+                        score = float(
+                            self._fallback_candidate_score(candidate, snapshots)
+                        )
 
                     evaluation = {"candidate": candidate.as_dict(), "score": score}
                     evaluations.append(evaluation)
-                    if best_evaluation is None or score > best_evaluation.get("score", float("-inf")):
+                    if best_evaluation is None or score > best_evaluation.get(
+                        "score", float("-inf")
+                    ):
                         best_evaluation = evaluation
 
             if evaluations:
@@ -1166,19 +1246,27 @@ class Orchestrator:
                 continue
 
             metadata = index_entry.get("metadata", {})
-            compression_data = metadata.get("compression") if isinstance(metadata, Mapping) else None
+            compression_data = (
+                metadata.get("compression") if isinstance(metadata, Mapping) else None
+            )
             if not isinstance(compression_data, Mapping):
                 issues.append({"key": key, "issue": "missing_compression_metadata"})
                 continue
 
             record = CompressionRecord.from_metadata(compression_data)
             compression_result = record.to_compression_result()
-            budget = compression_result.telemetry.budget or int(self._config.target_budget)
+            budget = compression_result.telemetry.budget or int(
+                self._config.target_budget
+            )
             budget = max(int(budget), 1)
             bottleneck = IBottleneck(target_budget=budget)
             reconstructed = bottleneck.decompress(compression_result)
 
-            metrics = reconstructed.get("metrics", {}) if isinstance(reconstructed, Mapping) else {}
+            metrics = (
+                reconstructed.get("metrics", {})
+                if isinstance(reconstructed, Mapping)
+                else {}
+            )
             retained_ratio = float(metrics.get("retained_ratio", 0.0) or 0.0)
             regenerated_ratio = float(metrics.get("regenerated_ratio", 0.0) or 0.0)
             mean_mse = float(metrics.get("mean_mse", 0.0) or 0.0)
@@ -1208,6 +1296,7 @@ class Orchestrator:
 
         reconstruction_summary: Dict[str, Any]
         if qualities:
+
             def _mean(values: Sequence[float]) -> float:
                 return float(sum(values) / len(values)) if values else 0.0
 
@@ -1272,7 +1361,9 @@ class Orchestrator:
         """Score a candidate policy using stored compression telemetry."""
 
         snapshots = self._collect_record_snapshots(window=window)
-        observations = self._collect_budget_observations(window=window, snapshots=snapshots)
+        observations = self._collect_budget_observations(
+            window=window, snapshots=snapshots
+        )
         features = self._build_history_features(snapshots, observations)
 
         field_sets = self._infer_candidate_field_sets(snapshots)
@@ -1365,14 +1456,22 @@ class Orchestrator:
             tokens_total = float(summary.get("tokens_total", 0.0) or 0.0)
             tokens_retained = float(summary.get("tokens_retained", 0.0) or 0.0)
             tokens_dropped = max(tokens_total - tokens_retained, 0.0)
-            dropped_ratio = float(tokens_dropped / tokens_total) if tokens_total else 0.0
+            dropped_ratio = (
+                float(tokens_dropped / tokens_total) if tokens_total else 0.0
+            )
             info_shortfall = max(0.0, 1.0 - min(mutual_information, 1.0))
             severity = dropped_ratio + info_shortfall
 
-            telemetry = record.telemetry if isinstance(record.telemetry, Mapping) else {}
+            telemetry = (
+                record.telemetry if isinstance(record.telemetry, Mapping) else {}
+            )
             fields = list(record.compressed_fields.keys())
             if not fields:
-                token_counts = telemetry.get("token_counts", {}) if isinstance(telemetry, Mapping) else {}
+                token_counts = (
+                    telemetry.get("token_counts", {})
+                    if isinstance(telemetry, Mapping)
+                    else {}
+                )
                 if isinstance(token_counts, Mapping):
                     fields = [str(field) for field in token_counts.keys()]
 
@@ -1383,9 +1482,11 @@ class Orchestrator:
                     "summary": summary,
                     "mutual_information": mutual_information,
                     "telemetry": _to_serialisable(telemetry),
-                    "policy_metadata": _to_serialisable(record.policy_metadata)
-                    if record.policy_metadata
-                    else None,
+                    "policy_metadata": (
+                        _to_serialisable(record.policy_metadata)
+                        if record.policy_metadata
+                        else None
+                    ),
                     "probe_outcomes": [
                         _to_serialisable(outcome) for outcome in record.probe_outcomes
                     ],
@@ -1404,8 +1505,13 @@ class Orchestrator:
         payload.setdefault("id", uuid.uuid4().hex[:12])
         payload.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
         self._recent_probe_outcomes.append(payload)
-        if self._probe_history_limit > 0 and len(self._recent_probe_outcomes) > self._probe_history_limit:
-            self._recent_probe_outcomes = self._recent_probe_outcomes[-self._probe_history_limit :]
+        if (
+            self._probe_history_limit > 0
+            and len(self._recent_probe_outcomes) > self._probe_history_limit
+        ):
+            self._recent_probe_outcomes = self._recent_probe_outcomes[
+                -self._probe_history_limit :
+            ]
 
     def _evaluate_constraints(self, event: UsageEvent) -> List[ConstraintResult]:
         if not self._constraints:
@@ -1433,10 +1539,14 @@ class Orchestrator:
             }
             self._recent_constraint_results.append(record)
             if self._probe_history_limit > 0:
-                self._recent_constraint_results = self._recent_constraint_results[-self._probe_history_limit :]
+                self._recent_constraint_results = self._recent_constraint_results[
+                    -self._probe_history_limit :
+                ]
         return results
 
-    def _update_superpositions(self, event: UsageEvent, metadata: Mapping[str, Any]) -> None:
+    def _update_superpositions(
+        self, event: UsageEvent, metadata: Mapping[str, Any]
+    ) -> None:
         if not self._superposition_channels:
             return
         payload = event.tensor
@@ -1541,12 +1651,16 @@ class Orchestrator:
             if isinstance(info_value, (int, float)):
                 info_bounds.append(float(info_value))
 
-            telemetry = record.telemetry if isinstance(record.telemetry, Mapping) else {}
+            telemetry = (
+                record.telemetry if isinstance(record.telemetry, Mapping) else {}
+            )
             field_mi = telemetry.get("field_mutual_information", {})
             if isinstance(field_mi, Mapping):
                 for field, value in field_mi.items():
                     try:
-                        field_information.setdefault(str(field), []).append(float(value))
+                        field_information.setdefault(str(field), []).append(
+                            float(value)
+                        )
                     except (TypeError, ValueError):
                         continue
 
@@ -1555,15 +1669,18 @@ class Orchestrator:
                 budgets.append(float(budget_value))
 
         mean_ratio = _safe_mean([obs.compression_ratio for obs in observations])
-        mean_tokens_total = _safe_mean([float(obs.tokens_total) for obs in observations])
-        mean_tokens_retained = _safe_mean([float(obs.tokens_retained) for obs in observations])
+        mean_tokens_total = _safe_mean(
+            [float(obs.tokens_total) for obs in observations]
+        )
+        mean_tokens_retained = _safe_mean(
+            [float(obs.tokens_retained) for obs in observations]
+        )
 
         features: Dict[str, Any] = {
             "mean_information_bound": _safe_mean(info_bounds),
             "max_information_bound": max(info_bounds) if info_bounds else 0.0,
             "field_information": {
-                field: _safe_mean(values)
-                for field, values in field_information.items()
+                field: _safe_mean(values) for field, values in field_information.items()
             },
             "mean_compression_ratio": mean_ratio,
             "mean_tokens_total": mean_tokens_total,
@@ -1592,13 +1709,17 @@ class Orchestrator:
 
         return features
 
-    def _infer_candidate_field_sets(self, snapshots: Sequence[Snapshot]) -> List[Tuple[str, ...]]:
+    def _infer_candidate_field_sets(
+        self, snapshots: Sequence[Snapshot]
+    ) -> List[Tuple[str, ...]]:
         field_sets: List[Tuple[str, ...]] = []
         union_fields: List[str] = []
 
         for _, record, _ in snapshots:
             fields = [str(field) for field in record.compressed_fields.keys()]
-            telemetry = record.telemetry if isinstance(record.telemetry, Mapping) else {}
+            telemetry = (
+                record.telemetry if isinstance(record.telemetry, Mapping) else {}
+            )
             if not fields and isinstance(telemetry, Mapping):
                 token_counts = telemetry.get("token_counts", {})
                 if isinstance(token_counts, Mapping):
@@ -1622,7 +1743,9 @@ class Orchestrator:
 
         return field_sets
 
-    def _candidate_budgets(self, base_budget: float, snapshots: Sequence[Snapshot]) -> List[float]:
+    def _candidate_budgets(
+        self, base_budget: float, snapshots: Sequence[Snapshot]
+    ) -> List[float]:
         budgets: List[float] = [float(base_budget), float(self._config.target_budget)]
         step = max(float(self._config.budget_step), 0.0)
 
@@ -1631,7 +1754,9 @@ class Orchestrator:
             budgets.append(float(self._config.target_budget) + step)
 
         for _, record, _ in snapshots:
-            telemetry = record.telemetry if isinstance(record.telemetry, Mapping) else {}
+            telemetry = (
+                record.telemetry if isinstance(record.telemetry, Mapping) else {}
+            )
             budget_value = telemetry.get("budget")
             if isinstance(budget_value, (int, float)):
                 budgets.append(float(budget_value))
@@ -1643,8 +1768,7 @@ class Orchestrator:
 
         min_budget = max(step or 1e-3, 1e-3)
         normalised = {
-            round(float(budget) if budget > 0 else min_budget, 6)
-            for budget in budgets
+            round(float(budget) if budget > 0 else min_budget, 6) for budget in budgets
         }
 
         return sorted(normalised)
@@ -1699,7 +1823,9 @@ class Orchestrator:
             compression_ratio = float(summary.get("compression_ratio", 0.0) or 0.0)
             tokens_total = int(summary.get("tokens_total", 0.0) or 0)
             tokens_retained = int(summary.get("tokens_retained", 0.0) or 0)
-            timestamp_value = metadata.get("timestamp") if isinstance(metadata, Mapping) else None
+            timestamp_value = (
+                metadata.get("timestamp") if isinstance(metadata, Mapping) else None
+            )
             timestamp = timestamp_value if isinstance(timestamp_value, str) else None
 
             observations.append(

@@ -4,52 +4,94 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**Grounded, multi‑field language models with information‑bottleneck compression and semantic tensor memory.**
+**Research exploration of multi‑field information bottlenecks and rate-distortion theory for structured data compression.**
 
-> Build LLMs that reason across *N* synchronized fields (text, layout, space, time, sensors, …) while using **variable‑rate token bottlenecks**—guided by information‑bottleneck / rate–distortion objectives—to slash context load without sacrificing fidelity. Persist compressed states in **Semantic Tensor Memory (STM)** and adapt over time via an **Auto‑IB Orchestrator**.
-
----
-
-## Why N‑D now?
-
-* **Reality is not 1‑D text.** Many tasks require aligned signals (words ↔ layout ↔ time ↔ coordinates ↔ audio/video ↔ metadata).
-* **Context is scarce.** Token budgets and latency matter; naive concatenation wastes capacity.
-* **Compression should be *learned***—and **query‑aware**—not a post‑hoc heuristic.
-
-**Key takeaway:** When tasks depend on conditionally informative signals beyond text, collapsing everything into a 1‑D projection permanently loses mutual information; synchronized N‑D inputs keep that utility and dominate the rate–distortion trade‑off. See the [full derivation](docs/why-nd-inputs.md) for the proof, the metatheoretical, code-forward whitepaper [*The Tensor Is The Message*](docs/the-tensor-is-the-message.md) for design laws, scaffolding, and quotable guidance, and the [Related Work & Novelty overview](docs/related-work-novelty.md) for the surrounding research landscape.
+> **Research Status**: This project explores theoretical frameworks for compressing multi-field structured data using information-bottleneck principles. Current empirical findings suggest practical limitations compared to simpler baselines. See [Empirical Findings](#empirical-findings) below.
 
 ---
 
-## Empirical Validation
+## Research Motivation
 
-**N-D encoding consistently beats text-only at fixed token budget.** On CORD receipt understanding (n=787), N-D multi-field encoding (text + layout + amounts) achieves **lower distortion** than text-only baselines across all token budgets tested (K ∈ {4, 8, 12, 16}).
+This project investigates whether multi-field structured representations can improve upon text-only baselines for document understanding tasks under token budget constraints, using information-theoretic compression principles.
+
+**Core questions:**
+* Can information-bottleneck theory guide efficient multi-field compression?
+* Do synchronized fields (text + layout + structure) preserve more task-relevant information than text alone at fixed budgets?
+* What are the rate-distortion trade-offs in multi-modal document representations?
+
+See the [full derivation](docs/why-nd-inputs.md) for the theoretical framework, the metatheoretical whitepaper [*The Tensor Is The Message*](docs/the-tensor-is-the-message.md) for design principles, and the [Related Work & Novelty overview](docs/related-work-novelty.md) for context.
+
+---
+
+## Empirical Findings
+
+**Text-only encoding outperforms N-D multi-field at realistic token budgets.** On CORD receipt understanding (n=787), text-only baselines achieve **lower distortion** than N-D multi-field encoding (text + layout + line) across all realistic budgets tested (K ∈ {50, 100, 200, 400}).
 
 <p align="center">
-  <img src="docs/figs/cord_rd_comparison.png" alt="Rate-Distortion Comparison" width="700"/>
+  <img src="docs/figs/cord_rd_realistic_fixed.png" alt="Rate-Distortion Comparison" width="700"/>
 </p>
 
-**Figure 1:** Rate-distortion curves on CORD-v2 receipt total classification. At every budget level, N-D encoding maintains lower error rates, validating the information-theoretic predictions. Distortion = classification error rate; lower is better.
+**Figure 1:** Rate-distortion curves on CORD-v2 receipt total classification. Text-only consistently achieves lower error rates than multi-field N-D encoding. Distortion = classification error rate; lower is better.
 
-| Budget (K) | N-D Distortion | Text-Only Distortion | ND Advantage |
-|------------|----------------|----------------------|--------------|
-| 4          | 0.0419         | 0.0432               | **-0.0013**  |
-| 8          | 0.0699         | 0.0737               | **-0.0038**  |
-| 12         | 0.0953         | 0.1017               | **-0.0064**  |
-| 16         | 0.1105         | 0.1156               | **-0.0051**  |
+| Budget (K) | N-D Distortion | Text-Only Distortion | Δ (N-D penalty) |
+|------------|----------------|----------------------|-----------------|
+| 50         | 0.1550         | **0.1449**          | +0.0101         |
+| 100        | 0.1588         | **0.1474**          | +0.0114         |
+| 200        | 0.1601         | **0.1474**          | +0.0127         |
+| 400        | 0.1601         | **0.1474**          | +0.0127         |
 
-*Full results: [`runs/cord_rd_sample.json`](runs/cord_rd_sample.json)*
+*Full results: [`runs/cord_rd_realistic_fixed.json`](runs/cord_rd_realistic_fixed.json)*
+
+**Analysis:** For text-extraction tasks (e.g., "What is the total?"), multi-field encoding dilutes the text budget by allocating tokens to layout/line fields that don't contain answer-relevant information. Text-only gives 100% of budget to content, while N-D gives ~45% to text and ~55% to structure—reducing accuracy on content-focused queries.
 
 **Reproducibility:**
 ```bash
 # Run rate-distortion audit on local CORD dataset
-python -m scripts.rd_audit --budgets 4 8 12 16 --dataset-size 800 \
-    --data-root datasets/CORD --output runs/cord_rd_sample.json
+export PYTHONPATH=.
+.venv/bin/python scripts/rd_audit.py --budgets 50 100 200 400 --dataset-size 787 \
+    --data-root "datasets/CORD 2" --output runs/cord_rd_realistic_fixed.json
 
 # Generate comparison plot
-python scripts/plot_rd_comparison.py
+.venv/bin/python scripts/plot_rd_comparison.py --input runs/cord_rd_realistic_fixed.json \
+    --output docs/figs/cord_rd_realistic_fixed.png
 ```
 
-**Key insight:** Even with simple stub encoders, multi-field inputs provide measurable gains. With production encoders (LayoutLM, etc.), the gap would be larger.
+**Research implications:** The multi-field approach faces fundamental challenges:
+1. **Task mismatch**: Content extraction tasks need text, not layout metadata
+2. **Budget fragmentation**: Splitting budget across fields reduces per-field fidelity
+3. **Field alignment**: Independent field selection creates incomplete representations for cross-field queries
+4. **Baseline competition**: LLMs with code execution capabilities likely outperform specialized compression architectures
+
+### Comparison to LLM Code Execution
+
+A critical finding: **modern LLMs with code execution likely obviate the need for custom compression architectures** for most practical applications.
+
+**LLM + Code Approach:**
+```python
+# LLM generates and executes:
+import pandas as pd
+df = pd.read_csv('wearable_data.csv')
+episodes = df[df['episode'] == True]
+pre_episode_hr = df.loc[episodes.index - 30, 'heart_rate_bpm'].mean()
+# ... arbitrary analysis on full dataset
+```
+
+**Advantages over N-D compression:**
+- **Unlimited data size**: Reads from disk/database, no context window constraints
+- **Perfect alignment**: Native pandas/SQL joins handle multi-modal temporal data
+- **Proper statistics**: Uses NumPy/SciPy for rigorous analysis, not compression approximations
+- **Complete flexibility**: Any query type, any analysis method
+- **Lower complexity**: No custom encoders, bottlenecks, or field registries needed
+
+The N-D framework might offer value only in narrow scenarios:
+- Extreme query frequency on same dataset (compress once, query 1000x)
+- Edge deployment with bandwidth constraints
+- Security-restricted environments without code execution
+- Theoretical research on rate-distortion bounds for structured data
+
+**Recommendation:** For production applications involving multi-modal temporal data, prefer LLMs with code execution (e.g., Claude with analysis tool, ChatGPT Code Interpreter) over custom compression frameworks.
+
+This project remains valuable as a research exploration of information-theoretic compression principles for structured data.
 
 ---
 
@@ -131,8 +173,9 @@ A control loop that probes what the model remembers, tunes bottleneck budgets, r
 
 ## Quickstart
 
-> **Status:** research pre‑release. The code skeleton below shows the intended API; swap in your encoders/LLM as you prototype.
-> For a maintained end-to-end walkthrough, see [`examples/multi_field_invoice.py`](examples/multi_field_invoice.py).
+> **Status:** Research prototype for exploring information-theoretic compression. Not recommended for production use—see [Comparison to LLM Code Execution](#comparison-to-llm-code-execution) for practical alternatives.
+>
+> The code below demonstrates the API for research purposes. For a maintained end-to-end walkthrough, see [`examples/multi_field_invoice.py`](examples/multi_field_invoice.py).
 
 ### Installation
 
@@ -357,54 +400,76 @@ The default report evaluates several budgets on a repeatable dataset; tweak the 
 
 ---
 
-## Roadmap
+## Research Status
 
-### Shipped milestones
+### Implemented Components
 
-* [x] MVP: registry + two encoders (text/layout) + simple top-k bottleneck — [`nd_llm/registry`](nd_llm/registry), [`nd_llm/encoders`](nd_llm/encoders)
-* [x] IB/RD proxies + target-budget API — [`nd_llm/bottleneck`](nd_llm/bottleneck)
-* [x] STM v0 (append-only, local FS) + retrieval hooks — [`nd_llm/stm`](nd_llm/stm)
-* [x] Orchestrator v0 (budget sweeps, retention probes) — [`nd_llm/orchestration`](nd_llm/orchestration)
+* [x] Field registry with multi-modal alignment keys — [`nd_llm/registry`](nd_llm/registry)
+* [x] Stub encoders for text/layout fields — [`nd_llm/encoders`](nd_llm/encoders)
+* [x] Information bottleneck with rate-distortion proxies — [`nd_llm/bottleneck`](nd_llm/bottleneck)
+* [x] Semantic Tensor Memory (STM) persistence layer — [`nd_llm/stm`](nd_llm/stm)
+* [x] Orchestrator for budget tuning and retention probes — [`nd_llm/orchestration`](nd_llm/orchestration)
+* [x] CORD receipt benchmark with realistic token budgets
 
-### In flight / upcoming
+### Open Research Questions
 
-* [ ] Example notebooks + tiny benchmarks to showcase multi-field tasks end-to-end
-* [ ] Paper alignment: figures, ablations, and narrative refinements for the public draft
+* [ ] Can joint token selection across fields resolve alignment issues?
+* [ ] What tasks genuinely require multi-field representations that LLMs with code execution cannot handle better?
+* [ ] Are there specialized deployment scenarios (extreme query frequency, bandwidth constraints, no code execution) where this approach provides value?
+* [ ] Can query-aware field dropping (allocating 100% budget to relevant fields) match single-field baselines?
+
+### Known Limitations
+
+* Multi-field encoding underperforms text-only on content extraction tasks (see [Empirical Findings](#empirical-findings))
+* Independent field selection creates misaligned representations for cross-field queries
+* Budget fragmentation reduces per-field fidelity compared to focused baselines
+* LLMs with code execution likely provide superior flexibility and accuracy for most practical applications
 
 ---
 
-## Research artifact
+## Research Documentation
 
-The working draft lives at `docs/Toward N-Dimensional LLMs with Information Bottlenecks.pdf`. 
+Theoretical foundations and design principles are documented in:
+- `docs/why-nd-inputs.md` - Information-theoretic derivations
+- `docs/the-tensor-is-the-message.md` - Architectural principles
+- `docs/related-work-novelty.md` - Research context
+
+Note: These documents present the theoretical framework. Empirical results suggest practical limitations compared to simpler baselines (see [Empirical Findings](#empirical-findings)). 
 
 ---
 
 ## Citing
 
-If you use or build on this work, please cite the accompanying paper.
-You can also find ready-to-use metadata in [CITATION.cff](CITATION.cff).
+If you use this codebase for research on information-theoretic compression or multi-field representations, please cite:
 
 ```bibtex
 @misc{farrow2025ndllm,
-  title        = {Toward N-Dimensional LLMs with Information Bottlenecks},
+  title        = {N-Dimensional LLM: Exploring Multi-Field Information Bottlenecks},
   author       = {Farrow, Joshua},
   year         = {2025},
   url          = {https://github.com/warrofua/n-dimensional-llm},
-  note         = {Preprint}
+  note         = {Research prototype}
 }
 ```
+
+Ready-to-use citation metadata is available in [CITATION.cff](CITATION.cff).
 
 ---
 
 ## Contributing
 
-PRs and issues welcome. Please:
+This is a research project exploring information-theoretic compression principles. Contributions are welcome for:
+- Alternative compression strategies or field selection mechanisms
+- New benchmarks that might favor multi-field representations
+- Theoretical analysis of rate-distortion trade-offs
+- Comparisons with other compression or retrieval approaches
 
-1. Open an issue describing the problem or proposal.
-2. Include a minimal repro (dataset slice, config, expected behavior).
-3. Target clean, typed code with tests where possible.
+Please:
+1. Open an issue describing the research question or proposed experiment
+2. Include theoretical motivation or empirical hypotheses
+3. Provide reproducible results with datasets and configurations
 
-Code of conduct and contribution guide will live in `CONTRIBUTING.md`.
+Note: Given the current empirical findings, practical applications may be better served by LLM code execution approaches (see [Comparison to LLM Code Execution](#comparison-to-llm-code-execution)).
 
 ---
 
@@ -416,6 +481,6 @@ This project is licensed under the [Apache License 2.0](LICENSE), offering a per
 
 ## Maintainer
 
-**Joshua Farrow** — research & design.
+**Joshua Farrow** — research exploration.
 
-For questions: open a GitHub issue or ping on X/Twitter `@jfarrow`.
+For research questions or collaboration: open a GitHub issue.

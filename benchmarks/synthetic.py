@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Sequence
+from typing import Any, Dict, List, Mapping, MutableMapping, Sequence
 
 from nd_llm.encoders import Encoder, LayoutEncoder, TextEncoder
 from nd_llm.registry import Registry
@@ -79,21 +79,23 @@ class SyntheticInvoice:
     lines: Sequence[SyntheticInvoiceLine]
 
     def as_fields(self) -> Dict[str, List[MutableMapping[str, Any]]]:
-        return invoice_fields({
-            "doc_id": self.doc_id,
-            "vendor": self.vendor,
-            "lines": [
-                {
-                    "doc_id": line.doc_id,
-                    "line_id": line.line_id,
-                    "description": line.description,
-                    "amount": line.amount,
-                    "bbox": line.bbox,
-                    "salience": line.salience,
-                }
-                for line in self.lines
-            ],
-        })
+        return invoice_fields(
+            {
+                "doc_id": self.doc_id,
+                "vendor": self.vendor,
+                "lines": [
+                    {
+                        "doc_id": line.doc_id,
+                        "line_id": line.line_id,
+                        "description": line.description,
+                        "amount": line.amount,
+                        "bbox": line.bbox,
+                        "salience": line.salience,
+                    }
+                    for line in self.lines
+                ],
+            }
+        )
 
 
 _VENDOR_NAMES = [
@@ -167,7 +169,9 @@ def synthetic_invoice_dataset(
     ]
 
 
-def invoice_fields(invoice: Mapping[str, Any]) -> Dict[str, List[MutableMapping[str, Any]]]:
+def invoice_fields(
+    invoice: Mapping[str, Any]
+) -> Dict[str, List[MutableMapping[str, Any]]]:
     """Convert an invoice dictionary to registry-aligned field batches."""
 
     doc_id = int(invoice.get("doc_id", 0))
@@ -210,7 +214,9 @@ def invoice_fields(invoice: Mapping[str, Any]) -> Dict[str, List[MutableMapping[
 def high_value_label(invoice: Mapping[str, Any], threshold: float) -> bool:
     """Return True if any line amount meets or exceeds ``threshold``."""
 
-    return any(float(line.get("amount", 0.0)) >= threshold for line in invoice.get("lines", []))
+    return any(
+        float(line.get("amount", 0.0)) >= threshold for line in invoice.get("lines", [])
+    )
 
 
 def _extract_amount(item: Any) -> float:

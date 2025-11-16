@@ -59,7 +59,9 @@ def test_rasterize_cells_shape_consistency() -> None:
 
 
 def test_assign_to_cells_weights_are_normalised() -> None:
-    backend = DEFAULT_BACKEND if DEFAULT_BACKEND != "torch" or TORCH_AVAILABLE else "numpy"
+    backend = (
+        DEFAULT_BACKEND if DEFAULT_BACKEND != "torch" or TORCH_AVAILABLE else "numpy"
+    )
     centers = rasterize_cells(1, grid_hw=(1, 2), backend=backend)
     coords = _to_backend([[0.0, 0.0], [0.0, 1.0]], backend)
     weights = assign_to_cells(coords, centers, tau=1e-4, backend=backend)
@@ -84,12 +86,15 @@ def test_aggregate_fields_mean_is_deterministic() -> None:
         "tokens": _to_backend([[2.0], [4.0]], backend),
         "coords": _to_backend([[0.0, 0.0], [0.0, 1.0]], backend),
     }
-    fused_a = aggregate_fields([field_one, field_two], centers, agg="mean", tau=1e-4, backend=backend)
-    fused_b = aggregate_fields([field_one, field_two], centers, agg="mean", tau=1e-4, backend=backend)
+    fused_a = aggregate_fields(
+        [field_one, field_two], centers, agg="mean", tau=1e-4, backend=backend
+    )
+    fused_b = aggregate_fields(
+        [field_one, field_two], centers, agg="mean", tau=1e-4, backend=backend
+    )
     fused_a_list = _to_list(fused_a)
     fused_b_list = _to_list(fused_b)
     for row_a, row_b in zip(fused_a_list[0], fused_b_list[0]):
         assert pytest.approx(row_a[0], rel=1e-6) == row_b[0]
     assert pytest.approx(fused_a_list[0][0][0], rel=1e-6) == 1.5
     assert pytest.approx(fused_a_list[0][1][0], rel=1e-6) == 3.5
-

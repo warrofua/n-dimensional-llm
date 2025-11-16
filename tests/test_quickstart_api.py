@@ -40,8 +40,7 @@ def test_quickstart_workflow(tmp_path: Path) -> None:
             for idx, (text, salience) in enumerate(spans)
         ],
         bbox=[
-            {"doc_id": 1, "span_id": idx, "xyxy": box}
-            for idx, box in enumerate(boxes)
+            {"doc_id": 1, "span_id": idx, "xyxy": box} for idx, box in enumerate(boxes)
         ],
     )
 
@@ -84,10 +83,15 @@ def test_quickstart_workflow(tmp_path: Path) -> None:
 
     assert usage_key in stm
     tensor, metadata = stm.retrieve(usage_key)
-    assert _as_list(tensor) == pytest.approx(result.telemetry.selected_scores.get("text", []))
+    assert _as_list(tensor) == pytest.approx(
+        result.telemetry.selected_scores.get("text", [])
+    )
     assert metadata["policy_name"] == "quickstart"
     assert metadata["target_budget"] == orchestrator.config.target_budget
-    assert metadata["compression"]["summary"]["tokens_retained"] <= metadata["compression"]["summary"]["tokens_total"]
+    assert (
+        metadata["compression"]["summary"]["tokens_retained"]
+        <= metadata["compression"]["summary"]["tokens_total"]
+    )
 
 
 def test_pack_fields_validates_alignment() -> None:

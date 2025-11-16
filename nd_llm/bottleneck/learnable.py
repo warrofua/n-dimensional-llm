@@ -1,7 +1,16 @@
 """Learnable scoring modules for the information bottleneck."""
+
 from __future__ import annotations
 
-from typing import Any, Mapping, MutableMapping, Optional, Sequence, Tuple, TYPE_CHECKING
+from typing import (
+    Any,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+    TYPE_CHECKING,
+)
 
 import torch
 from torch import Tensor, nn
@@ -71,13 +80,17 @@ class LearnableTokenScorer(nn.Module):
         if query is not None:
             expanded_query = self._expand_query(query, embeddings.size(0))
             if self.context_dim is None:
-                raise ValueError("scorer was initialised without context_dim but query was provided")
+                raise ValueError(
+                    "scorer was initialised without context_dim but query was provided"
+                )
             if expanded_query.size(1) != self.context_dim:
                 raise ValueError(
                     "query/context dimensionality does not match configured context_dim"
                 )
         elif self.context_dim is not None:
-            expanded_query = embeddings.new_zeros((embeddings.size(0), self.context_dim))
+            expanded_query = embeddings.new_zeros(
+                (embeddings.size(0), self.context_dim)
+            )
         else:
             expanded_query = None
         if expanded_query is not None:
@@ -91,7 +104,9 @@ class LearnableTokenScorer(nn.Module):
             if query.size(0) == 1:
                 return query.expand(target_tokens, -1)
             if query.size(0) != target_tokens:
-                raise ValueError("per-token query context must match embedding batch size")
+                raise ValueError(
+                    "per-token query context must match embedding batch size"
+                )
             return query
         raise ValueError("query tensor must be 1D or 2D")
 
@@ -125,7 +140,9 @@ class LearnableScoringStrategy:
         if not embeddings:
             return torch.zeros(0, device=device, dtype=dtype)
         embedding_tensor = torch.as_tensor(embeddings, device=device, dtype=dtype)
-        query_tensor = self._resolve_query_tensor(context, field, embedding_tensor, device, dtype)
+        query_tensor = self._resolve_query_tensor(
+            context, field, embedding_tensor, device, dtype
+        )
         return self.module(
             embedding_tensor,
             query=query_tensor,
@@ -197,7 +214,9 @@ def configure_scorer(
     dropout = float(config_map.pop("dropout", 0.0))
     activation = config_map.pop("activation", None)
     query_key = config_map.pop("query_key", DEFAULT_QUERY_KEY)
-    per_field_query_key = config_map.pop("per_field_query_key", DEFAULT_PER_FIELD_QUERY_KEY)
+    per_field_query_key = config_map.pop(
+        "per_field_query_key", DEFAULT_PER_FIELD_QUERY_KEY
+    )
     module = LearnableTokenScorer(
         embedding_dim=int(embedding_dim),
         context_dim=context_dim,
@@ -211,7 +230,9 @@ def configure_scorer(
         per_field_query_key=per_field_query_key,
     )
     if config_map:
-        raise ValueError(f"unexpected parameters for learnable scorer: {sorted(config_map)}")
+        raise ValueError(
+            f"unexpected parameters for learnable scorer: {sorted(config_map)}"
+        )
     return strategy_fn, module
 
 
@@ -220,4 +241,3 @@ __all__ = [
     "LearnableScoringStrategy",
     "configure_scorer",
 ]
-

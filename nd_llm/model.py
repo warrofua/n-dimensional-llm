@@ -1,11 +1,20 @@
 """High-level encoder/decoder scaffold combining ND-LLM components."""
 
-
 from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 import torch
 import torch.nn.functional as F
@@ -91,9 +100,13 @@ class CanonicalCellAggregator:
                 normalised = _normalise_identifier(raw)
                 doc_order_empty.append(normalised)
                 doc_values_empty.append(raw)
-            tokens = torch.zeros(len(doc_order_empty), 0, self._hidden_dim, device=device)
+            tokens = torch.zeros(
+                len(doc_order_empty), 0, self._hidden_dim, device=device
+            )
             mask = torch.zeros(len(doc_order_empty), 0, dtype=torch.bool, device=device)
-            empty_metadata: List[List[Mapping[str, Any]]] = [[] for _ in doc_order_empty]
+            empty_metadata: List[List[Mapping[str, Any]]] = [
+                [] for _ in doc_order_empty
+            ]
             empty_token_counts = [0 for _ in doc_order_empty]
             return _AggregatedBatch(
                 tokens=tokens,
@@ -118,11 +131,15 @@ class CanonicalCellAggregator:
             embeddings = encoder.encode(encoded_inputs)
             if not embeddings:
                 continue
-            embedding_tensor = torch.as_tensor(embeddings, dtype=torch.float32, device=device)
+            embedding_tensor = torch.as_tensor(
+                embeddings, dtype=torch.float32, device=device
+            )
             try:
                 projection = self._projections[field_name]
             except KeyError as exc:
-                raise KeyError(f"No projection registered for field '{field_name}'") from exc
+                raise KeyError(
+                    f"No projection registered for field '{field_name}'"
+                ) from exc
             projected = projection(embedding_tensor)
             field_spec = self._registry.fields[field_name]
             keys = list(field_spec.keys)
@@ -208,7 +225,9 @@ class CanonicalCellAggregator:
                     stacked = torch.cat([stacked, pad], dim=0)
                 else:
                     stacked = pad
-                pad_mask = torch.zeros(max_tokens - count, dtype=torch.bool, device=device)
+                pad_mask = torch.zeros(
+                    max_tokens - count, dtype=torch.bool, device=device
+                )
                 mask = torch.cat([mask, pad_mask], dim=0)
             ordered_tokens.append(stacked)
             ordered_mask.append(mask)
@@ -242,12 +261,16 @@ class CanonicalCellAggregator:
                 return [float(value) for value in coords[:4]]
             if all(key in entry for key in ("x", "y")):
                 return [float(entry.get("x", 0.0)), float(entry.get("y", 0.0))]
-        if isinstance(entry, Sequence) and not isinstance(entry, (str, bytes, bytearray)):
+        if isinstance(entry, Sequence) and not isinstance(
+            entry, (str, bytes, bytearray)
+        ):
             return [float(value) for value in entry[:4]]
         return None
 
     @staticmethod
-    def _resolve_key_tuple(entry: Mapping[str, Any], keys: Sequence[str]) -> Tuple[Any, ...]:
+    def _resolve_key_tuple(
+        entry: Mapping[str, Any], keys: Sequence[str]
+    ) -> Tuple[Any, ...]:
         if not keys:
             return tuple()
         return tuple(entry.get(key) for key in keys)
@@ -279,7 +302,9 @@ class TokenBottleneck(nn.Module):
         mask: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         if tokens.ndim != 3:
-            raise ValueError("tokens tensor must have shape (batch, num_tokens, hidden_dim)")
+            raise ValueError(
+                "tokens tensor must have shape (batch, num_tokens, hidden_dim)"
+            )
         batch, num_tokens, hidden_dim = tokens.shape
         if num_tokens == 0:
             empty = tokens.new_zeros(batch, 0, hidden_dim)
@@ -302,10 +327,14 @@ class TokenBottleneck(nn.Module):
         k = min(int(budget), num_tokens)
         topk = torch.topk(scores, k=k, dim=-1)
         indices = topk.indices
-        gathered = torch.gather(tokens, 1, indices.unsqueeze(-1).expand(-1, -1, hidden_dim))
+        gathered = torch.gather(
+            tokens, 1, indices.unsqueeze(-1).expand(-1, -1, hidden_dim)
+        )
         if mask is not None:
             selected_mask = torch.gather(mask, 1, indices)
-            gathered = torch.where(selected_mask.unsqueeze(-1), gathered, torch.zeros_like(gathered))
+            gathered = torch.where(
+                selected_mask.unsqueeze(-1), gathered, torch.zeros_like(gathered)
+            )
         else:
             selected_mask = torch.ones_like(indices, dtype=torch.bool)
         return gathered, indices, scores, selected_mask
@@ -386,7 +415,9 @@ class NDEncoderDecoder(nn.Module):
 
         extra_metadata = dict(metadata or {})
         if name not in self.registry.fields:
-            self.registry.add_field(name, keys=list(keys), salience=salience, **extra_metadata)
+            self.registry.add_field(
+                name, keys=list(keys), salience=salience, **extra_metadata
+            )
         else:
             spec = self.registry.fields[name]
             if list(keys) != list(spec.keys):
@@ -424,7 +455,9 @@ class NDEncoderDecoder(nn.Module):
         reorder_indices: Optional[Tensor] = None
         targets_input = batch.get("targets")
         if targets_input is not None:
-            targets_tensor = self._ensure_tensor(targets_input, dtype=torch.long, device=tokens.device)
+            targets_tensor = self._ensure_tensor(
+                targets_input, dtype=torch.long, device=tokens.device
+            )
             targets_tensor = targets_tensor.view(-1)
             targets_tensor, reorder_indices = self._reorder_targets(
                 targets_tensor,
@@ -441,7 +474,9 @@ class NDEncoderDecoder(nn.Module):
                 dtype=torch.float32,
                 device=tokens.device,
             )
-            if reorder_indices is not None and target_repr.size(0) == reorder_indices.size(0):
+            if reorder_indices is not None and target_repr.size(
+                0
+            ) == reorder_indices.size(0):
                 target_repr = target_repr.index_select(0, reorder_indices)
         elif targets_tensor is not None:
             target_repr = self._build_target_repr(targets_tensor)
@@ -464,7 +499,9 @@ class NDEncoderDecoder(nn.Module):
                 context=context_mapping,
             )
             telemetry = compression_result.telemetry
-            compression_metrics = {str(k): float(v) for k, v in compression_result.metrics.items()}
+            compression_metrics = {
+                str(k): float(v) for k, v in compression_result.metrics.items()
+            }
             compression_loss_terms = dict(compression_result.loss_terms)
         else:
             telemetry = None
@@ -477,13 +514,11 @@ class NDEncoderDecoder(nn.Module):
             token_scores,
         ) = self._gather_selected_tokens(tokens, mask, metadata, telemetry)
 
-        logits = self.decoder(selected_tokens, selected_mask if selected_mask.numel() else None)
+        logits = self.decoder(
+            selected_tokens, selected_mask if selected_mask.numel() else None
+        )
 
-        if (
-            target_repr is not None
-            and target_repr.numel()
-            and selected_tokens.numel()
-        ):
+        if target_repr is not None and target_repr.numel() and selected_tokens.numel():
             mi_lb_tensor, _ = self.mi(selected_tokens, target_repr)
         else:
             reference_tensor: Tensor
@@ -498,7 +533,9 @@ class NDEncoderDecoder(nn.Module):
             else torch.zeros(tokens.size(0), device=tokens.device)
         )
         batch_size = selected_tokens.size(0)
-        hidden_dim = selected_tokens.size(2) if selected_tokens.ndim == 3 else self.hidden_dim
+        hidden_dim = (
+            selected_tokens.size(2) if selected_tokens.ndim == 3 else self.hidden_dim
+        )
         if batch_size == 0:
             pooled_tokens = selected_tokens.new_zeros((0, hidden_dim))
         elif selected_tokens.size(1) == 0 or not selected_mask.numel():
@@ -518,17 +555,23 @@ class NDEncoderDecoder(nn.Module):
             tokens_selected_counts = selected_mask.sum(dim=1)
             has_any_tokens = bool(tokens_selected_counts.sum().item())
         else:
-            tokens_selected_counts = torch.zeros(batch_size, device=selected_tokens.device)
+            tokens_selected_counts = torch.zeros(
+                batch_size, device=selected_tokens.device
+            )
             has_any_tokens = False
 
         if target_repr is not None and has_any_tokens:
             mi_lb_tensor, _ = self.mi(pooled_tokens, target_repr)
         else:
-            mi_lb_tensor = pooled_tokens.new_zeros((), dtype=pooled_tokens.dtype, requires_grad=True)
+            mi_lb_tensor = pooled_tokens.new_zeros(
+                (), dtype=pooled_tokens.dtype, requires_grad=True
+            )
 
         tokens_selected = tokens_selected_counts
         tokens_available = (
-            mask.sum(dim=1) if mask.numel() else torch.zeros(tokens.size(0), device=tokens.device)
+            mask.sum(dim=1)
+            if mask.numel()
+            else torch.zeros(tokens.size(0), device=tokens.device)
         )
 
         logs: Dict[str, Any] = {
@@ -573,12 +616,16 @@ class NDEncoderDecoder(nn.Module):
             empty_scores = tokens.new_zeros((0, 0))
             return empty_tokens, empty_mask, [], empty_indices, empty_scores
 
-        if telemetry is None or not any(len(v) for v in telemetry.selected_indices.values()):
+        if telemetry is None or not any(
+            len(v) for v in telemetry.selected_indices.values()
+        ):
             empty_tokens = tokens.new_zeros((batch_size, 0, hidden_dim))
             empty_mask = torch.zeros(batch_size, 0, dtype=torch.bool, device=device)
             empty_indices = torch.zeros(batch_size, 0, dtype=torch.long, device=device)
             empty_scores = tokens.new_zeros((batch_size, 0))
-            empty_metadata: List[List[Mapping[str, Any]]] = [[] for _ in range(batch_size)]
+            empty_metadata: List[List[Mapping[str, Any]]] = [
+                [] for _ in range(batch_size)
+            ]
             return empty_tokens, empty_mask, empty_metadata, empty_indices, empty_scores
 
         selected_lookup: Dict[str, set[int]] = {}
@@ -610,7 +657,9 @@ class NDEncoderDecoder(nn.Module):
             else:
                 mask_row = None
             for pos, entry in enumerate(doc_meta_seq):
-                if mask_row is not None and (mask_row.size(0) <= pos or not mask_row[pos]):
+                if mask_row is not None and (
+                    mask_row.size(0) <= pos or not mask_row[pos]
+                ):
                     continue
                 field = str(entry.get("field"))
                 if field not in selected_lookup:
@@ -642,11 +691,21 @@ class NDEncoderDecoder(nn.Module):
             empty_mask = torch.zeros(batch_size, 0, dtype=torch.bool, device=device)
             empty_indices = torch.zeros(batch_size, 0, dtype=torch.long, device=device)
             empty_scores = tokens.new_zeros((batch_size, 0))
-            return empty_tokens, empty_mask, selected_metadata, empty_indices, empty_scores
+            return (
+                empty_tokens,
+                empty_mask,
+                selected_metadata,
+                empty_indices,
+                empty_scores,
+            )
 
         selected_tokens = tokens.new_zeros((batch_size, max_selected, hidden_dim))
-        selected_mask = torch.zeros(batch_size, max_selected, dtype=torch.bool, device=device)
-        index_tensor = torch.full((batch_size, max_selected), -1, dtype=torch.long, device=device)
+        selected_mask = torch.zeros(
+            batch_size, max_selected, dtype=torch.bool, device=device
+        )
+        index_tensor = torch.full(
+            (batch_size, max_selected), -1, dtype=torch.long, device=device
+        )
         score_tensor = tokens.new_full((batch_size, max_selected), float("-inf"))
 
         for doc_idx in range(batch_size):
@@ -664,7 +723,13 @@ class NDEncoderDecoder(nn.Module):
                 doc_selected_scores[doc_idx], dtype=tokens.dtype, device=device
             )
 
-        return selected_tokens, selected_mask, selected_metadata, index_tensor, score_tensor
+        return (
+            selected_tokens,
+            selected_mask,
+            selected_metadata,
+            index_tensor,
+            score_tensor,
+        )
 
     def _normalise_fields(
         self,
@@ -676,7 +741,9 @@ class NDEncoderDecoder(nn.Module):
             return {name: list(entries) for name, entries in fields.items()}
         raise TypeError("fields must be a mapping or PackedFields instance")
 
-    def _ensure_tensor(self, value: Any, *, dtype: torch.dtype, device: torch.device) -> Tensor:
+    def _ensure_tensor(
+        self, value: Any, *, dtype: torch.dtype, device: torch.device
+    ) -> Tensor:
         tensor = torch.as_tensor(value, dtype=dtype)
         return tensor.to(device=device)
 
@@ -700,7 +767,9 @@ class NDEncoderDecoder(nn.Module):
             if key not in mapping:
                 raise KeyError(f"Document id {key!r} missing from provided doc_ids")
             order_indices.append(mapping[key])
-        index_tensor = torch.tensor(order_indices, dtype=torch.long, device=targets.device)
+        index_tensor = torch.tensor(
+            order_indices, dtype=torch.long, device=targets.device
+        )
         return targets.index_select(0, index_tensor), index_tensor
 
     def _build_target_repr(self, targets: Tensor) -> Tensor:

@@ -1,7 +1,17 @@
 """Mutual-information helper utilities for assembling bottleneck context."""
+
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from nd_llm.encoders import Encoder
 from nd_llm.metrics import MIProxy
@@ -10,7 +20,9 @@ from nd_llm.metrics import MIProxy
 def _normalise_entries(entries: Iterable[Any]) -> list[Any]:
     if isinstance(entries, MutableMapping):
         return [dict(entries)]
-    if isinstance(entries, Sequence) and not isinstance(entries, (str, bytes, bytearray)):
+    if isinstance(entries, Sequence) and not isinstance(
+        entries, (str, bytes, bytearray)
+    ):
         result: list[Any] = []
         for item in entries:
             if isinstance(item, MutableMapping):
@@ -21,7 +33,9 @@ def _normalise_entries(entries: Iterable[Any]) -> list[Any]:
     return [entries]
 
 
-def _infer_embedding_dim(embeddings: Sequence[Sequence[float]], encoder: Encoder) -> int:
+def _infer_embedding_dim(
+    embeddings: Sequence[Sequence[float]], encoder: Encoder
+) -> int:
     dims = [len(vector) for vector in embeddings if len(vector)]
     if dims:
         return int(max(dims))

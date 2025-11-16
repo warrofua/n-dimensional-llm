@@ -20,7 +20,11 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from scripts.common import average_accuracy, build_invoice_dataloader, build_invoice_model
+from scripts.common import (
+    average_accuracy,
+    build_invoice_dataloader,
+    build_invoice_model,
+)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -32,10 +36,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=[4, 8, 12],
         help="Token budgets to evaluate",
     )
-    parser.add_argument("--dataset-size", type=int, default=24, help="Synthetic dataset size")
-    parser.add_argument("--threshold", type=float, default=500.0, help="Invoice threshold")
+    parser.add_argument(
+        "--dataset-size", type=int, default=24, help="Synthetic dataset size"
+    )
+    parser.add_argument(
+        "--threshold", type=float, default=500.0, help="Invoice threshold"
+    )
     parser.add_argument("--batch-size", type=int, default=2, help="Mini-batch size")
-    parser.add_argument("--hidden-dim", type=int, default=128, help="Model hidden dimension")
+    parser.add_argument(
+        "--hidden-dim", type=int, default=128, help="Model hidden dimension"
+    )
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     parser.add_argument(
         "--checkpoint",
@@ -82,9 +92,15 @@ def _evaluate_budget(
             logits, logs = model(batch, token_budget=budget)
             latency = time.perf_counter() - start_time
             batch_targets = logs.get("targets")
-            if batch_targets is None or not isinstance(batch_targets, torch.Tensor) or batch_targets.numel() == 0:
+            if (
+                batch_targets is None
+                or not isinstance(batch_targets, torch.Tensor)
+                or batch_targets.numel() == 0
+            ):
                 continue
-            label_counts.update(int(value) for value in batch_targets.tolist() if int(value) >= 0)
+            label_counts.update(
+                int(value) for value in batch_targets.tolist() if int(value) >= 0
+            )
             ce = F.cross_entropy(logits, batch_targets, ignore_index=-100)
             totals["cross_entropy"] += float(ce.detach().cpu())
             totals["accuracy"] += average_accuracy(logits, batch_targets)
@@ -93,7 +109,9 @@ def _evaluate_budget(
             if isinstance(tokens_tensor, torch.Tensor) and tokens_tensor.numel():
                 totals["tokens"] += float(tokens_tensor.float().mean().detach().cpu())
             totals["encoder_latency"] += latency
-            totals["encoder_flops"] += _estimate_flops_from_logs(logs, getattr(model, "hidden_dim", 1))
+            totals["encoder_flops"] += _estimate_flops_from_logs(
+                logs, getattr(model, "hidden_dim", 1)
+            )
             pre_dist, post_dist = _registration_metrics_from_logs(logs)
             totals["registration_pre"] += pre_dist
             totals["registration_post"] += post_dist
@@ -114,7 +132,9 @@ def _evaluate_budget(
     totals["label_entropy"] = label_entropy
     conditional_entropy = max(0.0, label_entropy - totals.get("mi_lb", 0.0))
     totals["conditional_entropy"] = conditional_entropy
-    totals["fano_error_bound"] = _fano_lower_bound(conditional_entropy, len(label_counts))
+    totals["fano_error_bound"] = _fano_lower_bound(
+        conditional_entropy, len(label_counts)
+    )
     return totals
 
 
@@ -203,7 +223,9 @@ def _metadata_dispersion(metadata: Any) -> float:
         return 0.0
     mean_y = sum(y for y, _ in coords) / len(coords)
     mean_x = sum(x for _, x in coords) / len(coords)
-    variance = sum((y - mean_y) ** 2 + (x - mean_x) ** 2 for y, x in coords) / len(coords)
+    variance = sum((y - mean_y) ** 2 + (x - mean_x) ** 2 for y, x in coords) / len(
+        coords
+    )
     return math.sqrt(max(variance, 0.0))
 
 

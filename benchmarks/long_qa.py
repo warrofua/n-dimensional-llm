@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, MutableMapping, Sequence
 
 from nd_llm.bottleneck import CompressionResult
 from nd_llm.encoders import Encoder, LayoutEncoder, TextEncoder
@@ -83,7 +83,9 @@ _FACT_TOKENS = [
 def build_longqa_registry() -> Registry:
     registry = Registry()
     registry.add_field("question", keys=["dialog_id"], salience=True, modality="text")
-    registry.add_field("context", keys=["dialog_id", "turn_id"], salience=True, modality="text")
+    registry.add_field(
+        "context", keys=["dialog_id", "turn_id"], salience=True, modality="text"
+    )
     registry.add_field("layout", keys=["dialog_id", "turn_id"], modality="layout")
     registry.add_field("timeline", keys=["dialog_id", "turn_id"], modality="temporal")
     registry.add_affinity("context", "layout", keys=["dialog_id", "turn_id"])
@@ -167,7 +169,9 @@ def synthetic_longqa_dataset(
     ]
 
 
-def longqa_fields(document: Mapping[str, Any]) -> Dict[str, List[MutableMapping[str, Any]]]:
+def longqa_fields(
+    document: Mapping[str, Any]
+) -> Dict[str, List[MutableMapping[str, Any]]]:
     dialog_id = int(document.get("dialog_id", 0))
     segments = list(document.get("segments", []))
     total_duration = max(
@@ -242,7 +246,9 @@ def _longqa_metadata(document: Mapping[str, Any], result: Any) -> Mapping[str, A
     return {
         "dialog_id": document.get("dialog_id"),
         "answer_turn": document.get("answer_turn"),
-        "kept_fields": {k: len(v) for k, v in getattr(result, "compressed_fields", {}).items()},
+        "kept_fields": {
+            k: len(v) for k, v in getattr(result, "compressed_fields", {}).items()
+        },
     }
 
 

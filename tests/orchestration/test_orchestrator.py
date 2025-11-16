@@ -85,12 +85,16 @@ def _make_canonical_record() -> CompressionRecord:
         metrics=metrics,
         bottleneck="ib-topk",
     )
+
+
 def test_orchestrator_persists_usage_event(tmp_path) -> None:
     storage_config = STMConfig(storage_dir=tmp_path)
     stm = STM(storage_config)
     orchestrator = Orchestrator(
         stm=stm,
-        config=OrchestratorConfig(target_budget=1.0, policy_name="integration-test", budget_step=0.2),
+        config=OrchestratorConfig(
+            target_budget=1.0, policy_name="integration-test", budget_step=0.2
+        ),
     )
 
     tensor_values = [0.1, 0.5, 0.9]
@@ -122,7 +126,10 @@ def test_orchestrator_persists_usage_event(tmp_path) -> None:
     assert probe["sampled_keys"] == []
     assert probe["log_size"] == 1
     assert probe["reconstruction"]["sample_size"] == 0
-    assert probe["issues"] and probe["issues"][0]["issue"] == "missing_compression_metadata"
+    assert (
+        probe["issues"]
+        and probe["issues"][0]["issue"] == "missing_compression_metadata"
+    )
 
 
 def test_orchestrator_generates_unique_keys(tmp_path) -> None:
@@ -130,7 +137,9 @@ def test_orchestrator_generates_unique_keys(tmp_path) -> None:
     stm = STM(storage_config)
     orchestrator = Orchestrator(
         stm=stm,
-        config=OrchestratorConfig(target_budget=0.5, policy_name="auto-key", budget_step=0.1),
+        config=OrchestratorConfig(
+            target_budget=0.5, policy_name="auto-key", budget_step=0.1
+        ),
     )
 
     tensor_values = [1.0, 2.0]
@@ -152,7 +161,9 @@ def test_orchestrator_enriches_layout_metadata(tmp_path) -> None:
     stm = STM(storage_config)
     orchestrator = Orchestrator(
         stm=stm,
-        config=OrchestratorConfig(target_budget=2.0, policy_name="layout", budget_step=0.5),
+        config=OrchestratorConfig(
+            target_budget=2.0, policy_name="layout", budget_step=0.5
+        ),
     )
 
     record = _make_canonical_record()
@@ -172,7 +183,9 @@ def test_orchestrator_enriches_layout_metadata(tmp_path) -> None:
     assert stored_metadata["mi_lb"] == pytest.approx(baseline_metadata["mi_lb"])
     assert "idx_cells" in stored_metadata
     assert "layout_signature" in stored_metadata
-    assert "canonical_cells" in stored_metadata.get("compression", {}).get("artifacts", {})
+    assert "canonical_cells" in stored_metadata.get("compression", {}).get(
+        "artifacts", {}
+    )
     assert "canonical_cells" in stored_metadata.get("artifacts", {})
 
     layout_signature = stored_metadata.get("layout_signature")
@@ -214,7 +227,9 @@ def test_budget_tuning_updates_target_budget(tmp_path) -> None:
         )
     )
 
-    strategy = CompressionRatioBudgetStrategy(lower_bound=0.6, upper_bound=0.8, step=0.5, min_budget=0.5)
+    strategy = CompressionRatioBudgetStrategy(
+        lower_bound=0.6, upper_bound=0.8, step=0.5, min_budget=0.5
+    )
     reduced_budget = orchestrator.tune_budget(strategy=strategy)
     assert reduced_budget < 3.0
     assert orchestrator.config.target_budget == pytest.approx(reduced_budget)
@@ -232,7 +247,10 @@ def test_budget_tuning_updates_target_budget(tmp_path) -> None:
     increased_budget = orchestrator.tune_budget(strategy=strategy)
     assert increased_budget >= reduced_budget
     assert len(orchestrator.budget_history) >= 2
-    assert orchestrator.budget_history[-1].metadata["average_ratio"] <= orchestrator.budget_history[-2].metadata["average_ratio"]
+    assert (
+        orchestrator.budget_history[-1].metadata["average_ratio"]
+        <= orchestrator.budget_history[-2].metadata["average_ratio"]
+    )
 
 
 def test_meta_model_guides_budget_and_proxy_trials(tmp_path) -> None:
@@ -256,8 +274,12 @@ def test_meta_model_guides_budget_and_proxy_trials(tmp_path) -> None:
         orchestrator.meta_model.__class__.__name__,
     )
 
-    record_text = _make_record(total_tokens=10, kept_tokens=10, budget=10, field="text", field_mi=0.6)
-    record_vision = _make_record(total_tokens=12, kept_tokens=12, budget=12, field="vision", field_mi=0.9)
+    record_text = _make_record(
+        total_tokens=10, kept_tokens=10, budget=10, field="text", field_mi=0.6
+    )
+    record_vision = _make_record(
+        total_tokens=12, kept_tokens=12, budget=12, field="vision", field_mi=0.9
+    )
 
     orchestrator.log_usage_event(
         UsageEvent(key="meta-1", tensor=[0.1, 0.2], compression=record_text)
@@ -276,7 +298,9 @@ def test_meta_model_guides_budget_and_proxy_trials(tmp_path) -> None:
     assert selected["candidate"]["budget"] == pytest.approx(tuned_budget)
     assert selected["score"] > 0
 
-    proxy = orchestrator.run_proxy_trial(candidate_budget=1.25, include_adversarial=True, window=2)
+    proxy = orchestrator.run_proxy_trial(
+        candidate_budget=1.25, include_adversarial=True, window=2
+    )
     assert proxy["candidate"]["budget"] == pytest.approx(1.25)
     assert proxy["meta_model"]["model"] == model_name
     assert proxy["meta_model"]["candidate"]["budget"] == pytest.approx(1.25)
@@ -286,7 +310,9 @@ def test_meta_model_guides_budget_and_proxy_trials(tmp_path) -> None:
     samples = orchestrator.generate_adversarial_samples(limit=1)
     assert samples and samples[0]["key"] in orchestrator.usage_log
 
-    final_record = _make_record(total_tokens=8, kept_tokens=4, budget=4, field="text", field_mi=0.2)
+    final_record = _make_record(
+        total_tokens=8, kept_tokens=4, budget=4, field="text", field_mi=0.2
+    )
     final_key = orchestrator.log_usage_event(
         UsageEvent(key="meta-final", tensor=[0.5, 0.6], compression=final_record)
     )
@@ -295,7 +321,9 @@ def test_meta_model_guides_budget_and_proxy_trials(tmp_path) -> None:
     compression_meta = index_entry["metadata"]["compression"]
     assert compression_meta["policy_metadata"]["policy"] == "meta-test"
     assert (
-        compression_meta["policy_metadata"]["decision"]["metadata"]["meta_model"]["model"]
+        compression_meta["policy_metadata"]["decision"]["metadata"]["meta_model"][
+            "model"
+        ]
         == model_name
     )
     probe_types = {entry["type"] for entry in compression_meta["probe_outcomes"]}
@@ -394,7 +422,9 @@ def test_orchestrator_runs_constraints_and_superpositions(tmp_path) -> None:
     constraint = FieldActivationConstraint(field="text", min_tokens=1)
     orchestrator = Orchestrator(
         stm=stm,
-        config=OrchestratorConfig(target_budget=1.0, policy_name="constraint-test", budget_step=0.5),
+        config=OrchestratorConfig(
+            target_budget=1.0, policy_name="constraint-test", budget_step=0.5
+        ),
         constraints=[constraint],
         superposition_channels=("usage",),
     )

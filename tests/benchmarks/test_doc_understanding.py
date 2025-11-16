@@ -4,7 +4,9 @@ from benchmarks.doc_understanding import run_benchmark, run_cord_benchmark
 
 
 def test_run_benchmark_smoke() -> None:
-    report = run_benchmark(budget_values=(2, 4), dataset_size=6, threshold=400.0, seed=2)
+    report = run_benchmark(
+        budget_values=(2, 4), dataset_size=6, threshold=400.0, seed=2
+    )
 
     assert report["dataset_size"] == 6
     assert report["threshold"] == 400.0

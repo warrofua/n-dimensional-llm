@@ -14,7 +14,11 @@ def test_multi_field_invoice_example(tmp_path: Path) -> None:
 
     stored_tensor = summary["stm_entry"]["tensor"]
     assert isinstance(stored_tensor, list)
-    flat = stored_tensor[0] if stored_tensor and isinstance(stored_tensor[0], list) else stored_tensor
+    flat = (
+        stored_tensor[0]
+        if stored_tensor and isinstance(stored_tensor[0], list)
+        else stored_tensor
+    )
     assert all(isinstance(value, float) for value in flat)
 
     retention = summary["retention_probe"]

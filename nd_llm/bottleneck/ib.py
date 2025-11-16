@@ -1,4 +1,5 @@
 """Information bottleneck with pluggable scoring and telemetry."""
+
 from __future__ import annotations
 
 import math
@@ -39,9 +40,13 @@ Embedding = Sequence[float]
 EmbeddingBatch = Sequence[Embedding]
 FieldMetadata = Mapping[str, Any]
 ScoreOutput = Union[ScoreVector, "Tensor"]
-ScoringFn = Callable[[str, EmbeddingBatch, FieldMetadata, Mapping[str, Any]], ScoreOutput]
+ScoringFn = Callable[
+    [str, EmbeddingBatch, FieldMetadata, Mapping[str, Any]], ScoreOutput
+]
 BudgetAllocation = Tuple[Dict[str, int], Dict[str, float]]
-BudgetAllocatorFn = Callable[[Mapping[str, Sequence[float]], Mapping[str, FieldMetadata], int], BudgetAllocation]
+BudgetAllocatorFn = Callable[
+    [Mapping[str, Sequence[float]], Mapping[str, FieldMetadata], int], BudgetAllocation
+]
 
 
 @dataclass
@@ -128,9 +133,13 @@ class QueryDotProductScoringStrategy:
             if not embedding:
                 scores.append(0.0)
                 continue
-            dot_product = sum(float(a) * float(b) for a, b in zip(embedding, query_vector))
+            dot_product = sum(
+                float(a) * float(b) for a, b in zip(embedding, query_vector)
+            )
             if self.normalize:
-                denom = query_norm * (base_score if base_score != 0.0 else _vector_norm(embedding))
+                denom = query_norm * (
+                    base_score if base_score != 0.0 else _vector_norm(embedding)
+                )
                 attention_score = dot_product / denom if denom else 0.0
             else:
                 attention_score = dot_product
@@ -139,11 +148,16 @@ class QueryDotProductScoringStrategy:
             elif self.mix_weight == 0.0:
                 combined = base_score
             else:
-                combined = self.mix_weight * attention_score + (1.0 - self.mix_weight) * base_score
+                combined = (
+                    self.mix_weight * attention_score
+                    + (1.0 - self.mix_weight) * base_score
+                )
             scores.append(combined)
         return scores
 
-    def _resolve_query(self, context: Mapping[str, Any], field: str) -> Optional[Sequence[float]]:
+    def _resolve_query(
+        self, context: Mapping[str, Any], field: str
+    ) -> Optional[Sequence[float]]:
         if not context:
             return None
         per_field = context.get(self.per_field_query_key)
@@ -218,7 +232,9 @@ class RegistryAwareBudgetAllocator:
 
         for field in scores:
             info = metadata.get(field, {})
-            budget_weight = info.get("budget_weight") if isinstance(info, Mapping) else None
+            budget_weight = (
+                info.get("budget_weight") if isinstance(info, Mapping) else None
+            )
             override_weight = self.field_weights.get(field)
             if override_weight is not None:
                 weight = float(override_weight)
@@ -226,7 +242,9 @@ class RegistryAwareBudgetAllocator:
                 weight = float(budget_weight)
             else:
                 keys = info.get("keys", []) if isinstance(info, Mapping) else []
-                salience = bool(info.get("salience")) if isinstance(info, Mapping) else False
+                salience = (
+                    bool(info.get("salience")) if isinstance(info, Mapping) else False
+                )
                 weight = 1.0 + self.key_weight * len(keys)
                 if salience:
                     weight *= self.salience_bonus
@@ -234,7 +252,10 @@ class RegistryAwareBudgetAllocator:
 
         eligible_fields = [field for field, count in token_counts.items() if count > 0]
         if limit <= 0 or not eligible_fields:
-            return ({field: 0 for field in scores}, {field: weights.get(field, 0.0) for field in scores})
+            return (
+                {field: 0 for field in scores},
+                {field: weights.get(field, 0.0) for field in scores},
+            )
 
         total_weight = sum(weights[field] for field in eligible_fields)
         if total_weight <= 0:
@@ -259,7 +280,9 @@ class RegistryAwareBudgetAllocator:
         salience_fields = [
             field
             for field, info in metadata.items()
-            if token_counts.get(field, 0) > 0 and isinstance(info, Mapping) and bool(info.get("salience"))
+            if token_counts.get(field, 0) > 0
+            and isinstance(info, Mapping)
+            and bool(info.get("salience"))
         ]
         for field in salience_fields:
             if assigned >= limit:
@@ -288,7 +311,8 @@ class RegistryAwareBudgetAllocator:
 
         if quotas:
             donors: Dict[str, int] = {
-                field: allocations.get(field, 0) - quotas.get(field, 0) for field in scores
+                field: allocations.get(field, 0) - quotas.get(field, 0)
+                for field in scores
             }
             for field, quota in quotas.items():
                 current = allocations.get(field, 0)
@@ -306,7 +330,9 @@ class RegistryAwareBudgetAllocator:
                         if candidate == field or surplus <= 0:
                             continue
                         if surplus > donor_surplus or (
-                            surplus == donor_surplus and donor_field is not None and candidate < donor_field
+                            surplus == donor_surplus
+                            and donor_field is not None
+                            and candidate < donor_field
                         ):
                             donor_field = candidate
                             donor_surplus = surplus
@@ -347,7 +373,9 @@ class IBottleneck:
             scorer, configured_module = configure_scorer(scorer_config)
         if learnable_scorer is None and configured_module is not None:
             learnable_scorer = configured_module
-        if learnable_scorer is not None and torch is None:  # pragma: no cover - defensive
+        if (
+            learnable_scorer is not None and torch is None
+        ):  # pragma: no cover - defensive
             raise RuntimeError("torch is required when supplying a learnable scorer")
         if learnable_scorer is not None and scorer is None:
             scorer = LearnableScoringStrategy(learnable_scorer)
@@ -380,7 +408,9 @@ class IBottleneck:
         self._score_tensors.clear()
         gating_scores = self._compute_scores(encoded, metadata, scoring_context)
 
-        field_budgets, allocation_weights = self.budget_allocator(gating_scores, metadata, self.target_budget)
+        field_budgets, allocation_weights = self.budget_allocator(
+            gating_scores, metadata, self.target_budget
+        )
         selected = self._select_indices(gating_scores, field_budgets)
 
         compressed_fields: Dict[str, List[Any]] = {}
@@ -396,11 +426,17 @@ class IBottleneck:
             field_scores = gating_scores[field]
             selected_scores[field] = [field_scores[i] for i in indices]
             selected_set = set(indices)
-            dropped = sorted(i for i in range(len(field_scores)) if i not in selected_set)
+            dropped = sorted(
+                i for i in range(len(field_scores)) if i not in selected_set
+            )
             dropped_indices[field] = dropped
             field_embeddings = encoded.get(field, [])
-            kept_embeddings = [field_embeddings[i] for i in indices if i < len(field_embeddings)]
-            dropped_embeddings = [field_embeddings[i] for i in dropped if i < len(field_embeddings)]
+            kept_embeddings = [
+                field_embeddings[i] for i in indices if i < len(field_embeddings)
+            ]
+            dropped_embeddings = [
+                field_embeddings[i] for i in dropped if i < len(field_embeddings)
+            ]
             residual_statistics[field] = _compute_residual_statistics(
                 kept_embeddings,
                 dropped_embeddings,
@@ -411,7 +447,9 @@ class IBottleneck:
             quantized_embeddings[field] = [
                 {
                     "index": int(idx),
-                    **_quantize_embedding(field_embeddings[idx] if idx < len(field_embeddings) else []),
+                    **_quantize_embedding(
+                        field_embeddings[idx] if idx < len(field_embeddings) else []
+                    ),
                 }
                 for idx in dropped
             ]
@@ -451,7 +489,9 @@ class IBottleneck:
         """Approximate reconstruction using stored telemetry artefacts."""
 
         telemetry = result.telemetry
-        kept = {field: list(values) for field, values in result.compressed_fields.items()}
+        kept = {
+            field: list(values) for field, values in result.compressed_fields.items()
+        }
 
         regenerated: Dict[str, List[Dict[str, Any]]] = {}
         field_metrics: Dict[str, Dict[str, float]] = {}
@@ -465,7 +505,9 @@ class IBottleneck:
         fields = set(telemetry.token_counts) | set(kept)
 
         for field in fields:
-            total_count = int(telemetry.token_counts.get(field, len(kept.get(field, []))))
+            total_count = int(
+                telemetry.token_counts.get(field, len(kept.get(field, [])))
+            )
             kept_tokens = kept.get(field, [])
             retained_counts.append(len(kept_tokens))
 
@@ -484,7 +526,9 @@ class IBottleneck:
             regenerated[field] = reconstructed_embeddings
             regenerated_counts.append(len(reconstructed_embeddings))
 
-            dropped_count = int(residual.get("dropped_count", len(reconstructed_embeddings)))
+            dropped_count = int(
+                residual.get("dropped_count", len(reconstructed_embeddings))
+            )
             field_mse = float(residual.get("mean_squared_error", 0.0))
             field_kl = float(residual.get("kl_divergence", 0.0))
 
@@ -506,8 +550,12 @@ class IBottleneck:
         total_kept = sum(retained_counts)
         total_regenerated = sum(regenerated_counts)
         total_tokens = total_kept + total_regenerated
-        retained_ratio = float(total_kept) / float(total_tokens) if total_tokens else 1.0
-        regenerated_ratio = float(total_regenerated) / float(total_tokens) if total_tokens else 0.0
+        retained_ratio = (
+            float(total_kept) / float(total_tokens) if total_tokens else 1.0
+        )
+        regenerated_ratio = (
+            float(total_regenerated) / float(total_tokens) if total_tokens else 0.0
+        )
         mean_mse = mse_accumulator / float(mse_weight or 1)
         mean_kl = kl_accumulator / float(kl_fields or 1)
 
@@ -571,7 +619,9 @@ class IBottleneck:
         if torch is not None and isinstance(raw_scores, torch.Tensor):
             tensor = raw_scores.squeeze(-1) if raw_scores.ndim > 1 else raw_scores
             if tensor.ndim != 1:
-                raise ValueError("learnable scorer must return a 1D tensor of per-token scores")
+                raise ValueError(
+                    "learnable scorer must return a 1D tensor of per-token scores"
+                )
             field_scores = [float(v) for v in tensor.detach().cpu().tolist()]
         else:
             field_scores = [float(v) for v in cast(Sequence[float], raw_scores)]
@@ -653,10 +703,7 @@ class IBottleneck:
             return list(base)
         base_norm = self._standardize_scores(base)
         mi_norm = self._standardize_scores(mi)
-        blended = [
-            (1.0 - weight) * b + weight * m
-            for b, m in zip(base_norm, mi_norm)
-        ]
+        blended = [(1.0 - weight) * b + weight * m for b, m in zip(base_norm, mi_norm)]
         return blended
 
     @staticmethod
@@ -748,9 +795,7 @@ class IBottleneck:
             if not embeddings:
                 continue
             kept_vectors = [
-                embeddings[i]
-                for i in indices
-                if 0 <= int(i) < len(embeddings)
+                embeddings[i] for i in indices if 0 <= int(i) < len(embeddings)
             ]
             if not kept_vectors:
                 continue
@@ -858,9 +903,7 @@ class IBottleneck:
         total_energy = kept_energy + dropped_energy
         ib_proxy = kept_energy / total_energy if total_energy else 0.0
         rd_proxy = dropped_energy / float(total_tokens or 1)
-        average_reconstruction = (
-            reconstruction_error / float(total_tokens or 1)
-        )
+        average_reconstruction = reconstruction_error / float(total_tokens or 1)
         return {
             "ib_proxy": ib_proxy,
             "rd_proxy": rd_proxy,
@@ -961,7 +1004,11 @@ def _compute_residual_statistics(
             "kl_divergence": 0.0,
         }
 
-    kept_mean = _mean_vector(kept_embeddings) if kept_embeddings else [0.0] * len(dropped_embeddings[0])
+    kept_mean = (
+        _mean_vector(kept_embeddings)
+        if kept_embeddings
+        else [0.0] * len(dropped_embeddings[0])
+    )
     dropped_mean = _mean_vector(dropped_embeddings)
     mse = _mse(kept_mean, dropped_mean)
 
@@ -1086,7 +1133,9 @@ def _mse(a: Sequence[float], b: Sequence[float]) -> float:
     return error / float(dim)
 
 
-def _coerce_tensor(value: Any, dtype: "torch.dtype", device: "torch.device") -> Optional["Tensor"]:
+def _coerce_tensor(
+    value: Any, dtype: "torch.dtype", device: "torch.device"
+) -> Optional["Tensor"]:
     if torch is None:  # pragma: no cover - torch dependency handled by caller
         return None
     if isinstance(value, torch.Tensor):

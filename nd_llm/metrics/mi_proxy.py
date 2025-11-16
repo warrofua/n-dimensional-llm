@@ -1,4 +1,5 @@
 """Mutual information proxy based on InfoNCE with lightweight heads."""
+
 from __future__ import annotations
 
 from typing import Any, Tuple
@@ -25,7 +26,9 @@ class MIProxy(nn.Module):
     tensors transparently.
     """
 
-    def __init__(self, d_model: int, d_proj: int = 256, temperature: float = 0.07) -> None:
+    def __init__(
+        self, d_model: int, d_proj: int = 256, temperature: float = 0.07
+    ) -> None:
         if torch is None:  # pragma: no cover - defensive guard when torch missing
             raise RuntimeError("torch is required to instantiate MIProxy")
         super().__init__()
@@ -47,7 +50,9 @@ class MIProxy(nn.Module):
         )
         self.tau = float(temperature)
 
-    def forward(self, z: Tensor, y_repr: Tensor) -> Tuple[Tensor, Tensor]:  # noqa: D401 - standard module contract
+    def forward(
+        self, z: Tensor, y_repr: Tensor
+    ) -> Tuple[Tensor, Tensor]:  # noqa: D401 - standard module contract
         """Compute the InfoNCE lower bound and classifier logits.
 
         Parameters

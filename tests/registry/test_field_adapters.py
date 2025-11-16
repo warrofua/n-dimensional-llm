@@ -1,14 +1,32 @@
 from __future__ import annotations
 
-from nd_llm.registry import FieldAdapter, FieldAdapterRegistry, LayoutAligner, quad_to_box
+from nd_llm.registry import (
+    FieldAdapter,
+    FieldAdapterRegistry,
+    LayoutAligner,
+    quad_to_box,
+)
 
 
 def test_field_adapter_registry_adds_coords() -> None:
     def builder(document):
-        yield {"quad": {"x1": 0, "y1": 0, "x2": 50, "y2": 0, "x3": 50, "y3": 100, "x4": 0, "y4": 100}}
+        yield {
+            "quad": {
+                "x1": 0,
+                "y1": 0,
+                "x2": 50,
+                "y2": 0,
+                "x3": 50,
+                "y3": 100,
+                "x4": 0,
+                "y4": 100,
+            }
+        }
 
     registry = FieldAdapterRegistry()
-    registry.register(FieldAdapter(name="layout", builder=builder, aligner=LayoutAligner()))
+    registry.register(
+        FieldAdapter(name="layout", builder=builder, aligner=LayoutAligner())
+    )
 
     transformed = registry.transform({"width": 100, "height": 200})
     assert "layout" in transformed

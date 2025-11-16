@@ -5,10 +5,8 @@ from __future__ import annotations
 import math
 from typing import (
     Any,
-    Iterable,
     List,
     Mapping,
-    MutableMapping,
     Sequence,
     TYPE_CHECKING,
     TypeAlias,
@@ -66,10 +64,16 @@ def rasterize_cells(
             raise RuntimeError("torch backend requested but torch is unavailable")
         tensor_dtype = dtype if dtype is not None else torch.float32
         tensor_device = device if device is not None else torch.device("cpu")
-        ys = torch.linspace(0.0, 1.0, steps=height, device=tensor_device, dtype=tensor_dtype)
-        xs = torch.linspace(0.0, 1.0, steps=width, device=tensor_device, dtype=tensor_dtype)
+        ys = torch.linspace(
+            0.0, 1.0, steps=height, device=tensor_device, dtype=tensor_dtype
+        )
+        xs = torch.linspace(
+            0.0, 1.0, steps=width, device=tensor_device, dtype=tensor_dtype
+        )
         grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
-        centres_tensor = torch.stack([grid_y, grid_x], dim=-1).view(1, height * width, 2)
+        centres_tensor = torch.stack([grid_y, grid_x], dim=-1).view(
+            1, height * width, 2
+        )
         return centres_tensor.repeat(batch_size, 1, 1)
 
     if resolved_backend == "numpy":
@@ -79,7 +83,9 @@ def rasterize_cells(
         ys = _np.linspace(0.0, 1.0, num=height, dtype=array_dtype)
         xs = _np.linspace(0.0, 1.0, num=width, dtype=array_dtype)
         grid_y, grid_x = _np.meshgrid(ys, xs, indexing="ij")
-        centres_array = _np.stack([grid_y, grid_x], axis=-1).reshape(1, height * width, 2)
+        centres_array = _np.stack([grid_y, grid_x], axis=-1).reshape(
+            1, height * width, 2
+        )
         if batch_size == 1:
             return centres_array
         return _np.repeat(centres_array, repeats=batch_size, axis=0)
@@ -173,7 +179,9 @@ def _assign_torch(coords: Any, cell_centers: Any, tau: float) -> Any:
     if torch is None:  # pragma: no cover - defensive
         raise RuntimeError("torch backend requested but torch is unavailable")
     coords_tensor = torch.as_tensor(coords, dtype=torch.float32)
-    centres_tensor = torch.as_tensor(cell_centers, dtype=coords_tensor.dtype, device=coords_tensor.device)
+    centres_tensor = torch.as_tensor(
+        cell_centers, dtype=coords_tensor.dtype, device=coords_tensor.device
+    )
     if coords_tensor.ndim != 3:
         raise ValueError("coords must be a 3D tensor with shape (B, N, K)")
     if centres_tensor.ndim != 3:
@@ -181,7 +189,9 @@ def _assign_torch(coords: Any, cell_centers: Any, tau: float) -> Any:
     if coords_tensor.size(0) != centres_tensor.size(0):
         raise ValueError("coords and cell_centers must share the same batch dimension")
     if coords_tensor.size(-1) != centres_tensor.size(-1):
-        raise ValueError("coords and cell_centers must share the same coordinate dimension")
+        raise ValueError(
+            "coords and cell_centers must share the same coordinate dimension"
+        )
     diff = coords_tensor.unsqueeze(2) - centres_tensor.unsqueeze(1)
     dist2 = diff.pow(2).sum(dim=-1)
     scaled = -dist2 / (2.0 * tau * tau)
@@ -211,7 +221,9 @@ def _assign_numpy(coords: Any, cell_centers: Any, tau: float) -> Any:
     return exp / denom
 
 
-def _assign_python(coords: Any, cell_centers: Any, tau: float) -> List[List[List[float]]]:
+def _assign_python(
+    coords: Any, cell_centers: Any, tau: float
+) -> List[List[List[float]]]:
     coords_list = _materialise_list(coords)
     centres_list = _materialise_list(cell_centers)
     if not coords_list:
@@ -270,7 +282,9 @@ def _aggregate_torch(
             fused = torch.zeros(batch, cells, feature_dim, dtype=tokens.dtype)
             totals = torch.zeros(batch, cells, dtype=tokens.dtype)
         elif tokens.size(2) != feature_dim:
-            raise ValueError("all token tensors must share the same embedding dimension")
+            raise ValueError(
+                "all token tensors must share the same embedding dimension"
+            )
 
         weights = assign_to_cells(coords, centres, tau=tau, backend="torch")
         fused = fused + torch.einsum("bnc,bnd->bcd", weights, tokens)
@@ -316,7 +330,9 @@ def _aggregate_numpy(
             fused = _np.zeros((batch, cells, feature_dim), dtype=tokens.dtype)
             totals = _np.zeros((batch, cells), dtype=tokens.dtype)
         elif int(tokens.shape[2]) != feature_dim:
-            raise ValueError("all token tensors must share the same embedding dimension")
+            raise ValueError(
+                "all token tensors must share the same embedding dimension"
+            )
 
         weights = assign_to_cells(coords, centres, tau=tau, backend="numpy")
         fused = fused + _np.einsum("bnc,bnd->bcd", weights, tokens)
@@ -360,7 +376,9 @@ def _aggregate_python(
             ]
             totals = [[0.0 for _ in range(cells)] for _ in range(batch)]
         elif tokens and len(tokens[0][0]) != feature_dim:
-            raise ValueError("all token tensors must share the same embedding dimension")
+            raise ValueError(
+                "all token tensors must share the same embedding dimension"
+            )
 
         if fused is None or totals is None or feature_dim is None:
             continue
@@ -371,7 +389,9 @@ def _aggregate_python(
                 embedding = tokens[batch_index][token_index]
                 for cell_index, weight in enumerate(weight_vector):
                     for dim in range(feature_dim):
-                        fused[batch_index][cell_index][dim] += weight * float(embedding[dim])
+                        fused[batch_index][cell_index][dim] += weight * float(
+                            embedding[dim]
+                        )
                     totals[batch_index][cell_index] += weight
 
     if fused is None or totals is None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, MutableMapping, Sequence
 
 from nd_llm.bottleneck import CompressionResult
 from nd_llm.encoders import Encoder, LayoutEncoder, TextEncoder
@@ -83,7 +83,9 @@ _CAPTION_VERBS = [
 def build_videoqa_registry() -> Registry:
     registry = Registry()
     registry.add_field("question", keys=["clip_id"], salience=True, modality="text")
-    registry.add_field("frames", keys=["clip_id", "frame_id"], salience=True, modality="text")
+    registry.add_field(
+        "frames", keys=["clip_id", "frame_id"], salience=True, modality="text"
+    )
     registry.add_field("layout", keys=["clip_id", "frame_id"], modality="layout")
     registry.add_field("vision", keys=["clip_id", "frame_id"], modality="vision")
     registry.add_affinity("frames", "layout", keys=["clip_id", "frame_id"])
@@ -163,7 +165,9 @@ def synthetic_videoqa_dataset(
     ]
 
 
-def videoqa_fields(document: Mapping[str, Any]) -> Dict[str, List[MutableMapping[str, Any]]]:
+def videoqa_fields(
+    document: Mapping[str, Any]
+) -> Dict[str, List[MutableMapping[str, Any]]]:
     clip_id = int(document.get("clip_id", 0))
     frames = list(document.get("frames", []))
     fields: Dict[str, List[MutableMapping[str, Any]]] = {
@@ -182,7 +186,9 @@ def videoqa_fields(document: Mapping[str, Any]) -> Dict[str, List[MutableMapping
     for frame in frames:
         frame_id = int(frame.get("frame_id", 0))
         rel = frame_id / total_frames if total_frames else 0.0
-        bbox = list(frame.get("bbox", [rel, rel, min(1.0, rel + 0.2), min(1.0, rel + 0.2)]))
+        bbox = list(
+            frame.get("bbox", [rel, rel, min(1.0, rel + 0.2), min(1.0, rel + 0.2)])
+        )
         fields["frames"].append(
             {
                 "clip_id": clip_id,
@@ -229,7 +235,9 @@ def _videoqa_metadata(document: Mapping[str, Any], result: Any) -> Mapping[str, 
     return {
         "clip_id": document.get("clip_id"),
         "target_frame": document.get("target_frame"),
-        "kept_fields": {k: len(v) for k, v in getattr(result, "compressed_fields", {}).items()},
+        "kept_fields": {
+            k: len(v) for k, v in getattr(result, "compressed_fields", {}).items()
+        },
     }
 
 

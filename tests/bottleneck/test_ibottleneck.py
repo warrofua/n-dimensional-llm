@@ -68,7 +68,9 @@ def test_query_conditioned_scoring_prefers_query_aligned_tokens():
         target_budget=1,
         scorer=QueryDotProductScoringStrategy(mix_weight=1.0),
     )
-    result = bottleneck.compress(fields, encoders, context={"query_embedding": query_vector})
+    result = bottleneck.compress(
+        fields, encoders, context={"query_embedding": query_vector}
+    )
 
     assert result.telemetry.selected_indices["text"] == [0]
     assert result.telemetry.field_budgets["text"] == 1
@@ -88,7 +90,9 @@ class DeterministicMIProxy(nn.Module):
     def h(self, target: torch.Tensor) -> torch.Tensor:
         return target
 
-    def forward(self, z: torch.Tensor, y: torch.Tensor):  # noqa: D401 - compatibility shim
+    def forward(
+        self, z: torch.Tensor, y: torch.Tensor
+    ):  # noqa: D401 - compatibility shim
         logits = torch.zeros(z.size(0), y.size(0), device=z.device, dtype=z.dtype)
         zero = torch.zeros((), device=z.device, dtype=z.dtype)
         return zero, logits
@@ -127,7 +131,10 @@ def test_budget_allocator_respects_salience_metadata():
 
     assert result.telemetry.field_budgets["salient"] == 2
     assert result.telemetry.field_budgets["context"] == 1
-    assert result.telemetry.allocation_weights["salient"] > result.telemetry.allocation_weights["context"]
+    assert (
+        result.telemetry.allocation_weights["salient"]
+        > result.telemetry.allocation_weights["context"]
+    )
     assert sum(len(v) for v in result.telemetry.selected_indices.values()) == 3
 
 
@@ -161,7 +168,10 @@ def test_scorer_configuration_allows_strategy_swapping():
     norm_bottleneck = IBottleneck(target_budget=1, scorer_config="norm")
     norm_result = norm_bottleneck.compress(fields, encoders)
 
-    assert norm_result.telemetry.selected_indices == default_result.telemetry.selected_indices
+    assert (
+        norm_result.telemetry.selected_indices
+        == default_result.telemetry.selected_indices
+    )
     assert norm_result.loss_terms == {}
 
     learn_config = {
@@ -172,7 +182,9 @@ def test_scorer_configuration_allows_strategy_swapping():
     }
     learn_bottleneck = IBottleneck(target_budget=1, scorer_config=learn_config)
     assert isinstance(learn_bottleneck.learnable_scorer, LearnableTokenScorer)
-    learn_result = learn_bottleneck.compress(fields, encoders, context={"query_embedding": [1.0, 0.0]})
+    learn_result = learn_bottleneck.compress(
+        fields, encoders, context={"query_embedding": [1.0, 0.0]}
+    )
     assert set(learn_result.loss_terms.keys()) >= {"ib_proxy", "rd_proxy"}
     _, helper_module = configure_scorer({**learn_config, "type": "learnable"})
     assert isinstance(helper_module, LearnableTokenScorer)
@@ -185,7 +197,9 @@ def test_learnable_scorer_yields_trainable_loss_terms():
     scorer = LearnableTokenScorer(embedding_dim=2, context_dim=2, hidden_dims=(8,))
     bottleneck = IBottleneck(target_budget=2, learnable_scorer=scorer)
 
-    result = bottleneck.compress(fields, encoders, context={"query_embedding": [0.6, 0.4]})
+    result = bottleneck.compress(
+        fields, encoders, context={"query_embedding": [0.6, 0.4]}
+    )
 
     assert "ib_proxy" in result.loss_terms
     assert "rd_proxy" in result.loss_terms
@@ -235,7 +249,10 @@ def test_mi_proxy_improves_alignment_score():
     misaligned_lb, misaligned_logits = proxy(embeddings, misaligned_targets)
 
     assert aligned_lb.item() > misaligned_lb.item()
-    assert torch.diagonal(aligned_logits).mean().item() > torch.diagonal(misaligned_logits).mean().item()
+    assert (
+        torch.diagonal(aligned_logits).mean().item()
+        > torch.diagonal(misaligned_logits).mean().item()
+    )
 
 
 def test_compression_summary_includes_mutual_information_metric():
@@ -272,7 +289,9 @@ def test_mi_lower_bound_is_nonzero_for_aligned_fields():
         "alpha": MockEncoder([[1.2, 0.1], [1.1, 0.2]]),
         "beta": MockEncoder([[0.2, 1.1], [0.1, 1.0]]),
     }
-    proxy, context = build_mi_proxy_context(fields, encoders, preferred_fields=("alpha", "beta"))
+    proxy, context = build_mi_proxy_context(
+        fields, encoders, preferred_fields=("alpha", "beta")
+    )
     assert proxy is not None, "Expected MI proxy to be instantiated for aligned fields"
     bottleneck = IBottleneck(target_budget=4)
     result = bottleneck.compress(fields, encoders, context=context, mi_proxy=proxy)

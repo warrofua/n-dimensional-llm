@@ -4,7 +4,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+)
 
 from nd_llm.encoders import Encoder, TextEncoder
 from nd_llm.registry import Registry
@@ -75,7 +84,9 @@ def _load_chartqa_sample(limit: Optional[int]) -> List[Dict[str, Any]]:
     return docs
 
 
-def _prepare_chartqa_document(raw: Mapping[str, Any], default_doc_id: str) -> Dict[str, Any]:
+def _prepare_chartqa_document(
+    raw: Mapping[str, Any], default_doc_id: str
+) -> Dict[str, Any]:
     doc_id = str(raw.get("id") or raw.get("doc_id") or f"chartqa-{default_doc_id}")
     question = str(raw.get("question", "")).strip()
     answer = str(raw.get("answer", "")).strip()
@@ -108,14 +119,18 @@ def _prepare_chartqa_document(raw: Mapping[str, Any], default_doc_id: str) -> Di
 
 def build_chartqa_registry() -> Registry:
     registry = Registry()
-    registry.add_field("question", keys=["doc_id", "token_id"], salience=True, modality="text")
+    registry.add_field(
+        "question", keys=["doc_id", "token_id"], salience=True, modality="text"
+    )
     registry.add_field("chart", keys=["doc_id", "row_id"], modality="table")
     registry.add_affinity("question", "chart", keys=["doc_id"])
     registry.validate()
     return registry
 
 
-def build_chartqa_encoders(registry: Registry, *, question_dim: int = 16, chart_dim: int = 12) -> Dict[str, Encoder]:
+def build_chartqa_encoders(
+    registry: Registry, *, question_dim: int = 16, chart_dim: int = 12
+) -> Dict[str, Encoder]:
     encoders: Dict[str, Encoder] = {
         "question": TextEncoder(embedding_dim=question_dim),
         "chart": TextEncoder(embedding_dim=chart_dim),
@@ -125,7 +140,9 @@ def build_chartqa_encoders(registry: Registry, *, question_dim: int = 16, chart_
     return encoders
 
 
-def chartqa_fields(document: Mapping[str, Any]) -> Dict[str, List[MutableMapping[str, Any]]]:
+def chartqa_fields(
+    document: Mapping[str, Any]
+) -> Dict[str, List[MutableMapping[str, Any]]]:
     doc_id = str(document.get("doc_id") or "")
     question = str(document.get("question", ""))
     chart_entries = list(document.get("chart") or [])
@@ -168,7 +185,9 @@ def run_chartqa_benchmark(
     registry = build_chartqa_registry()
     build_chartqa_encoders(registry)
     limit = dataset_size if dataset_size > 0 else None
-    dataset = load_chartqa_dataset(split=split, limit=limit, use_sample=use_sample, cache_dir=cache_dir)
+    dataset = load_chartqa_dataset(
+        split=split, limit=limit, use_sample=use_sample, cache_dir=cache_dir
+    )
     actual_size = len(dataset)
 
     budgets: List[Dict[str, Any]] = []
@@ -227,7 +246,9 @@ def _evaluate_chartqa_budget(
         if mi_value is not None:
             mi_total += float(mi_value)
             mi_count += 1
-        kept = sum(len(indices) for indices in result.telemetry.selected_indices.values())
+        kept = sum(
+            len(indices) for indices in result.telemetry.selected_indices.values()
+        )
         kept_totals += kept
         doc_count += 1
 
@@ -249,7 +270,9 @@ def _chartqa_predict(document: Mapping[str, Any], result: Any) -> str:
     chart_entries = document.get("chart") or []
     if chart_entries and isinstance(chart_entries, list):
         try:
-            values = [(entry["label"], float(entry["value"])) for entry in chart_entries]
+            values = [
+                (entry["label"], float(entry["value"])) for entry in chart_entries
+            ]
         except Exception:
             values = []
     else:

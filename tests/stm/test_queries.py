@@ -98,18 +98,30 @@ def test_query_filters_by_alignment_and_ratio(tmp_path) -> None:
     stm.append(
         "entry-1",
         tensor=[0.1, 0.2],
-        metadata={"alignment_key": "session-1", "compression": record_low.as_metadata()},
+        metadata={
+            "alignment_key": "session-1",
+            "compression": record_low.as_metadata(),
+        },
     )
     stm.append(
         "entry-2",
         tensor=[0.3, 0.4],
-        metadata={"alignment_key": "session-2", "compression": record_high.as_metadata()},
+        metadata={
+            "alignment_key": "session-2",
+            "compression": record_high.as_metadata(),
+        },
     )
 
     session_two = stm.list_by_alignment("session-2")
     assert session_two == ["entry-2"]
 
-    ratio_query = stm.query(metadata_filter={"compression.summary.compression_ratio": record_high.summary()["compression_ratio"]})
+    ratio_query = stm.query(
+        metadata_filter={
+            "compression.summary.compression_ratio": record_high.summary()[
+                "compression_ratio"
+            ]
+        }
+    )
     keys = [key for key, _ in ratio_query]
     assert keys == ["entry-2"]
 

@@ -70,7 +70,9 @@ class PackedFields(Mapping[str, List[Any]]):
 
         return [dict(row) for row in self._key_rows]
 
-    def to_field_batches(self, value_keys: Optional[Mapping[str, Any]] = None) -> Dict[str, List[Any]]:
+    def to_field_batches(
+        self, value_keys: Optional[Mapping[str, Any]] = None
+    ) -> Dict[str, List[Any]]:
         """Convert the packed payloads into encoder-ready batches.
 
         Parameters
@@ -96,7 +98,10 @@ class PackedFields(Mapping[str, List[Any]]):
     def as_dict(self) -> Dict[str, List[Any]]:
         """Return a deep copy of the packed payload mapping."""
 
-        return {field: [_copy_entry(entry) for entry in entries] for field, entries in self._payloads.items()}
+        return {
+            field: [_copy_entry(entry) for entry in entries]
+            for field, entries in self._payloads.items()
+        }
 
     def with_keys(self) -> Dict[str, List[Any]]:
         """Return payload rows merged with their corresponding key columns."""
@@ -111,7 +116,9 @@ class PackedFields(Mapping[str, List[Any]]):
         return combined
 
     @staticmethod
-    def _merge_entry_with_keys(entry: Any, key_rows: Sequence[Dict[Any, Any]], index: int) -> Any:
+    def _merge_entry_with_keys(
+        entry: Any, key_rows: Sequence[Dict[Any, Any]], index: int
+    ) -> Any:
         payload = _copy_entry(entry)
         if index >= len(key_rows):
             return payload
@@ -133,7 +140,10 @@ class PackedFields(Mapping[str, List[Any]]):
 # public API
 # ----------------------------------------------------------------------
 
-def pack_fields(*, keys: Optional[Sequence[Any]] = None, **field_batches: Iterable[Any]) -> PackedFields:
+
+def pack_fields(
+    *, keys: Optional[Sequence[Any]] = None, **field_batches: Iterable[Any]
+) -> PackedFields:
     """Normalize keyword field batches into encoder-friendly payloads.
 
     The helper accepts keyword arguments mapping field names to iterables of
@@ -177,6 +187,7 @@ def pack_fields(*, keys: Optional[Sequence[Any]] = None, **field_batches: Iterab
 # ----------------------------------------------------------------------
 # internal helpers
 # ----------------------------------------------------------------------
+
 
 def _materialize_entries(raw: Iterable[Any]) -> List[Any]:
     if isinstance(raw, Mapping):
@@ -223,7 +234,9 @@ def _collect_field_keys(
     return common_keys or set(), per_field
 
 
-def _validate_key_alignment(per_field_keys: Mapping[str, set[Any]], key_set: set[Any]) -> None:
+def _validate_key_alignment(
+    per_field_keys: Mapping[str, set[Any]], key_set: set[Any]
+) -> None:
     if not per_field_keys:
         return
 
@@ -255,7 +268,9 @@ def _looks_like_alignment_key(key: Any) -> bool:
     return any(lowered.endswith(suffix) for suffix in suffixes)
 
 
-def _determine_key_order(materialized: Mapping[str, List[Any]], key_set: set[Any]) -> List[Any]:
+def _determine_key_order(
+    materialized: Mapping[str, List[Any]], key_set: set[Any]
+) -> List[Any]:
     if not key_set:
         return []
 
@@ -278,7 +293,9 @@ def _determine_key_order(materialized: Mapping[str, List[Any]], key_set: set[Any
     return key_order
 
 
-def _validate_key_presence(materialized: Mapping[str, List[Any]], key_order: Sequence[Any]) -> None:
+def _validate_key_presence(
+    materialized: Mapping[str, List[Any]], key_order: Sequence[Any]
+) -> None:
     if not key_order:
         return
 

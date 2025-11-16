@@ -37,7 +37,9 @@ class FakeBottleneck(IBottleneck):
     """Deterministic bottleneck stub that returns predefined selections."""
 
     def __init__(self, selections: Mapping[str, Sequence[int]]) -> None:
-        self._selections = {str(field): list(indices) for field, indices in selections.items()}
+        self._selections = {
+            str(field): list(indices) for field, indices in selections.items()
+        }
         total_selected = sum(len(indices) for indices in self._selections.values())
         target_budget = max(1, total_selected)
         super().__init__(target_budget=target_budget)
@@ -61,9 +63,13 @@ class FakeBottleneck(IBottleneck):
             selected_indices[key] = indices
             token_counts[key] = len(entries)
             selected_scores[key] = [float(i + 1) for i in range(len(indices))]
-            compressed_fields[key] = [entries[idx] for idx in indices if 0 <= idx < len(entries)]
+            compressed_fields[key] = [
+                entries[idx] for idx in indices if 0 <= idx < len(entries)
+            ]
             selected_set = set(indices)
-            dropped_indices[key] = [idx for idx in range(len(entries)) if idx not in selected_set]
+            dropped_indices[key] = [
+                idx for idx in range(len(entries)) if idx not in selected_set
+            ]
 
         for field, indices in self._selections.items():
             if field not in selected_indices:
@@ -78,7 +84,9 @@ class FakeBottleneck(IBottleneck):
             selected_scores=selected_scores,
             token_counts=token_counts,
             budget=self.target_budget,
-            field_budgets={field: len(indices) for field, indices in selected_indices.items()},
+            field_budgets={
+                field: len(indices) for field, indices in selected_indices.items()
+            },
             allocation_weights={field: 1.0 for field in selected_indices},
             dropped_indices=dropped_indices,
             residual_statistics={field: {} for field in selected_indices},
@@ -450,8 +458,11 @@ def test_nd_encoder_decoder_accepts_packed_fields() -> None:
     packed_counts = [len(items) for items in packed_metadata]
     assert raw_counts == packed_counts
 
-    raw_order = [[(entry["field"], entry["index"]) for entry in items] for items in raw_metadata]
+    raw_order = [
+        [(entry["field"], entry["index"]) for entry in items] for items in raw_metadata
+    ]
     packed_order = [
-        [(entry["field"], entry["index"]) for entry in items] for items in packed_metadata
+        [(entry["field"], entry["index"]) for entry in items]
+        for items in packed_metadata
     ]
     assert raw_order == packed_order

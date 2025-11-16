@@ -11,7 +11,17 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+)
 
 try:  # pragma: no cover - optional dependency for aggregation helpers
     import numpy as _np  # type: ignore
@@ -23,7 +33,11 @@ try:  # pragma: no cover - optional dependency for aggregation helpers
 except Exception:  # pragma: no cover - fallback when torch is unavailable
     torch = None  # type: ignore[assignment]
 
-from nd_llm.bottleneck import CompressionResult, IBottleneck, RegistryAwareBudgetAllocator
+from nd_llm.bottleneck import (
+    CompressionResult,
+    IBottleneck,
+    RegistryAwareBudgetAllocator,
+)
 from nd_llm.orchestration import CompressionRecord, Orchestrator, UsageEvent
 from nd_llm.stm import STM
 from nd_llm.utils import (
@@ -80,15 +94,19 @@ class BudgetRun:
         payload = {
             "budget": self.budget,
             "accuracy": self.accuracy,
-            "average_kept_tokens": sum(self.kept_tokens) / len(self.kept_tokens)
-            if self.kept_tokens
-            else 0.0,
+            "average_kept_tokens": (
+                sum(self.kept_tokens) / len(self.kept_tokens)
+                if self.kept_tokens
+                else 0.0
+            ),
             "budget_probe": self.budget_probe,
             "retention_probe": self.retention_probe,
             "metrics": dict(self.metrics),
         }
         if self.cell_fusions:
-            payload["cell_fusions"] = [_serialise_cell_fusion(item) for item in self.cell_fusions]
+            payload["cell_fusions"] = [
+                _serialise_cell_fusion(item) for item in self.cell_fusions
+            ]
         if self.ablations:
             payload["ablations"] = self.ablations
         return payload
@@ -104,14 +122,16 @@ def run_benchmark(
     """Evaluate token budget trade-offs on a synthetic invoice dataset."""
 
     registry = build_invoice_registry()
-    encoders = build_invoice_encoders(registry)
+    build_invoice_encoders(registry)
     dataset = synthetic_invoice_dataset(dataset_size, seed=seed)
     ablations = _invoice_ablation_suite(seed)
 
     runs: List[BudgetRun] = []
     predict_fn = _invoice_prediction_factory(threshold)
 
-    def _label_fn(invoice: Mapping[str, Any], threshold_value: float = threshold) -> Any:
+    def _label_fn(
+        invoice: Mapping[str, Any], threshold_value: float = threshold
+    ) -> Any:
         return high_value_label(invoice, threshold_value)
 
     for budget in budget_values:
@@ -119,6 +139,7 @@ def run_benchmark(
             budget=int(budget),
             dataset=dataset,
             registry_encoders=registry.encoders,
+            registry=registry,
             fields_fn=invoice_fields,
             label_fn=_label_fn,
             predict_fn=predict_fn,
@@ -136,6 +157,7 @@ def run_benchmark(
         "threshold": threshold,
         "budgets": [run.to_dict() for run in runs],
     }
+
 
 def run_cord_benchmark(
     budget_values: Iterable[int] = (4, 8, 12),
@@ -173,6 +195,7 @@ def run_cord_benchmark(
             budget=int(budget),
             dataset=dataset,
             registry_encoders=registry.encoders,
+            registry=registry,
             fields_fn=cord_fields,
             label_fn=_label_fn,
             predict_fn=predict_fn,
@@ -200,6 +223,7 @@ def _evaluate_budget(
     budget: int,
     dataset: Sequence[Mapping[str, Any]],
     registry_encoders: Mapping[str, Any],
+    registry: Optional[Any] = None,
     fields_fn: FieldsFn,
     label_fn: LabelFn,
     predict_fn: PredictFn,
@@ -212,14 +236,18 @@ def _evaluate_budget(
     allocator_kwargs: Optional[Mapping[str, Any]] = None,
 ) -> BudgetRun:
     budget_allocator = RegistryAwareBudgetAllocator(**dict(allocator_kwargs or {}))
-    bottleneck = IBottleneck(target_budget=int(budget), budget_allocator=budget_allocator)
+    bottleneck = IBottleneck(
+        target_budget=int(budget), budget_allocator=budget_allocator
+    )
 
     ablation_totals: Dict[str, Dict[str, Any]] = {}
     ablation_bottlenecks: Dict[str, IBottleneck] = {}
     if ablations:
         ablation_totals = {name: _make_ablation_totals() for name in ablations}
         ablation_bottlenecks = {
-            name: IBottleneck(target_budget=int(budget), budget_allocator=budget_allocator)
+            name: IBottleneck(
+                target_budget=int(budget), budget_allocator=budget_allocator
+            )
             for name in ablations
         }
 
@@ -257,8 +285,12 @@ def _evaluate_budget(
             )
             cell_fusions.append(cell_fusion)
             registration_metrics = cell_fusion.get("registration", {})
-            total_pre_distortion += float(registration_metrics.get("pre_distortion", 0.0))
-            total_post_distortion += float(registration_metrics.get("post_distortion", 0.0))
+            total_pre_distortion += float(
+                registration_metrics.get("pre_distortion", 0.0)
+            )
+            total_post_distortion += float(
+                registration_metrics.get("post_distortion", 0.0)
+            )
 
             label = label_fn(document)
             label_counts[label] += 1
@@ -272,6 +304,7 @@ def _evaluate_budget(
             result = bottleneck.compress(
                 fields,
                 encoders=registry_encoders,
+                registry=registry,
                 context=mi_context,
                 mi_proxy=mi_proxy,
             )
@@ -283,7 +316,9 @@ def _evaluate_budget(
             if prediction == label:
                 correct += 1
 
-            kept = sum(len(indices) for indices in result.telemetry.selected_indices.values())
+            kept = sum(
+                len(indices) for indices in result.telemetry.selected_indices.values()
+            )
             kept_tokens.append(kept)
 
             for field_name, indices in result.telemetry.selected_indices.items():
@@ -301,12 +336,13 @@ def _evaluate_budget(
                 extra = metadata_fn(document, result)
                 if extra:
                     metadata.update(dict(extra))
-            compression_record = CompressionRecord.from_result(result, bottleneck=bottleneck)
             orchestrator.log_usage_event(
                 UsageEvent(
                     tensor=[scores_vector],
                     metadata=metadata,
-                    compression=CompressionRecord.from_result(result, bottleneck=bottleneck),
+                    compression=CompressionRecord.from_result(
+                        result, bottleneck=bottleneck
+                    ),
                 )
             )
 
@@ -350,7 +386,8 @@ def _evaluate_budget(
                     ab_latency = time.perf_counter() - ab_start
                     ab_prediction = predict_fn(ab_result, document)
                     ab_kept = sum(
-                        len(indices) for indices in ab_result.telemetry.selected_indices.values()
+                        len(indices)
+                        for indices in ab_result.telemetry.selected_indices.values()
                     )
                     ab_metrics = ablation_totals[name]
                     ab_metrics["count"] += 1
@@ -358,7 +395,9 @@ def _evaluate_budget(
                         ab_metrics["correct"] += 1
                     ab_metrics["kept_tokens"].append(ab_kept)
                     ab_metrics["latency"] += ab_latency
-                    ab_metrics["flops"] += _estimate_encoder_flops(mutated_fields, registry_encoders)
+                    ab_metrics["flops"] += _estimate_encoder_flops(
+                        mutated_fields, registry_encoders
+                    )
                     for key, value in ab_result.metrics.items():
                         ab_metrics["metrics"][key] += float(value)
                     ab_reg = ab_cell_fusion.get("registration", {})
@@ -378,7 +417,9 @@ def _evaluate_budget(
             metrics["encoder_latency_seconds"] = total_latency / dataset_size
             metrics["encoder_flops"] = total_flops / dataset_size
             metrics["registration_pre_distortion"] = total_pre_distortion / dataset_size
-            metrics["registration_post_distortion"] = total_post_distortion / dataset_size
+            metrics["registration_post_distortion"] = (
+                total_post_distortion / dataset_size
+            )
             metrics["kept_by_field"] = OrderedDict(
                 (field, total / dataset_size)
                 for field, total in sorted(kept_by_field_totals.items())
@@ -391,7 +432,9 @@ def _evaluate_budget(
         mi_estimate = metrics.get("mi_lower_bound") or metrics.get("ib_proxy") or 0.0
         conditional_entropy = max(0.0, label_entropy - mi_estimate)
         metrics["conditional_entropy"] = conditional_entropy
-        metrics["fano_error_bound"] = _fano_lower_bound(conditional_entropy, len(label_counts))
+        metrics["fano_error_bound"] = _fano_lower_bound(
+            conditional_entropy, len(label_counts)
+        )
 
         budget_probe = orchestrator.budget_sweep()
         retention_probe = orchestrator.run_retention_probe()
@@ -434,8 +477,12 @@ def _summarise_ablations(totals: Mapping[str, Dict[str, Any]]) -> Dict[str, Any]
         averaged = {key: float(val) / count for key, val in metrics_dict.items()}
         averaged["encoder_latency_seconds"] = float(values.get("latency", 0.0)) / count
         averaged["encoder_flops"] = float(values.get("flops", 0.0)) / count
-        averaged["registration_pre_distortion"] = float(values.get("reg_pre", 0.0)) / count
-        averaged["registration_post_distortion"] = float(values.get("reg_post", 0.0)) / count
+        averaged["registration_pre_distortion"] = (
+            float(values.get("reg_pre", 0.0)) / count
+        )
+        averaged["registration_post_distortion"] = (
+            float(values.get("reg_post", 0.0)) / count
+        )
 
         label_counts = values.get("label_counts", Counter())
         averaged["label_entropy"] = _entropy(label_counts)
@@ -448,9 +495,9 @@ def _summarise_ablations(totals: Mapping[str, Dict[str, Any]]) -> Dict[str, Any]
         report[name] = {
             "accuracy": float(values.get("correct", 0)) / count,
             "count": count,
-            "average_kept_tokens": sum(kept_tokens) / len(kept_tokens)
-            if kept_tokens
-            else 0.0,
+            "average_kept_tokens": (
+                sum(kept_tokens) / len(kept_tokens) if kept_tokens else 0.0
+            ),
             "metrics": averaged,
         }
     return report
@@ -629,7 +676,9 @@ def _invoice_prediction_factory(threshold: float) -> PredictFn:
     return _predict
 
 
-def _invoice_metadata(invoice: Mapping[str, Any], _: CompressionResult) -> Mapping[str, Any]:
+def _invoice_metadata(
+    invoice: Mapping[str, Any], _: CompressionResult
+) -> Mapping[str, Any]:
     return {"doc_id": invoice.get("doc_id")}
 
 
@@ -796,7 +845,9 @@ def _registration_metrics(
     field_coords: Sequence[Sequence[float]],
     cell_centers: Any,
 ) -> Dict[str, Any]:
-    layout_centers = [_center_from_entry(entry) for entry in layout_entries if entry is not None]
+    layout_centers = [
+        _center_from_entry(entry) for entry in layout_entries if entry is not None
+    ]
     canonical_centers = _flatten_centers(cell_centers)
     pre = _average_nearest_distance(layout_centers, canonical_centers)
     post = _average_nearest_distance(field_coords, canonical_centers)
@@ -839,7 +890,9 @@ def _euclidean_distance(a: Sequence[float], b: Sequence[float]) -> float:
     return math.sqrt(dy * dy + dx * dx)
 
 
-def _pad_field_embeddings(vectors: Sequence[Sequence[float]], target_dim: int) -> List[List[float]]:
+def _pad_field_embeddings(
+    vectors: Sequence[Sequence[float]], target_dim: int
+) -> List[List[float]]:
     if target_dim <= 0:
         return [[0.0] * 0 for _ in vectors]
     padded: List[List[float]] = []
@@ -943,9 +996,11 @@ def _serialise_cell_fusion(fusion: Mapping[str, Any]) -> Dict[str, Any]:
 def _cord_prediction_factory(threshold: float) -> PredictFn:
     def _predict(result: CompressionResult, document: Mapping[str, Any]) -> bool:
         guess = _cord_guess_total(result)
+        # If can't extract total from compressed fields, predict False (low value)
+        # This properly penalizes insufficient compression rather than falling back to ground truth
         if guess is None:
-            guess = cord_total_amount(document)
-        return float(guess or 0.0) >= float(threshold)
+            guess = 0.0
+        return float(guess) >= float(threshold)
 
     return _predict
 
@@ -990,7 +1045,9 @@ def _cord_max_amount(
     return best
 
 
-def _cord_metadata(document: Mapping[str, Any], _: CompressionResult) -> Mapping[str, Any]:
+def _cord_metadata(
+    document: Mapping[str, Any], _: CompressionResult
+) -> Mapping[str, Any]:
     return {
         "doc_id": document.get("doc_id"),
         "total_amount": cord_total_amount(document),

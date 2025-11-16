@@ -30,9 +30,13 @@ def test_cord_sample_roundtrip() -> None:
     assert set(fields) == {"text", "layout", "line"}
     assert len(fields["text"]) == len(fields["layout"])
     assert all(item["xyxy"] for item in fields["layout"])
-    assert all(0.0 <= coord <= 1.0 for entry in fields["layout"] for coord in entry["xyxy"])
+    assert all(
+        0.0 <= coord <= 1.0 for entry in fields["layout"] for coord in entry["xyxy"]
+    )
     assert all(entry.get("coords") for entry in fields["text"])
-    assert all(0.0 <= coord <= 1.0 for entry in fields["text"] for coord in entry["coords"])
+    assert all(
+        0.0 <= coord <= 1.0 for entry in fields["text"] for coord in entry["coords"]
+    )
     assert all(entry.get("coords") for entry in fields["line"])
 
     mi_proxy, mi_context = build_mi_proxy_context(
@@ -62,9 +66,16 @@ def test_load_cord_dataset_from_local_root(tmp_path) -> None:
     root = tmp_path / "CORD"
     split_dir = root / "train" / "json"
     split_dir.mkdir(parents=True)
-    sample_path = Path(__file__).resolve().parents[2] / "benchmarks" / "data" / "cord_sample.jsonl"
+    sample_path = (
+        Path(__file__).resolve().parents[2]
+        / "benchmarks"
+        / "data"
+        / "cord_sample.jsonl"
+    )
     sample_line = json.loads(sample_path.read_text().splitlines()[0])
     (split_dir / "sample.json").write_text(json.dumps(sample_line))
 
-    dataset = load_cord_dataset(split="train", use_sample=False, data_root=root, limit=1)
+    dataset = load_cord_dataset(
+        split="train", use_sample=False, data_root=root, limit=1
+    )
     assert dataset and dataset[0]["doc_id"] == "cord-sample-0"
