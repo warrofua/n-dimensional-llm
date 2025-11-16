@@ -5,7 +5,17 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+)
 
 from nd_llm.encoders import Encoder, LayoutEncoder, TextEncoder
 from nd_llm.registry import (
@@ -158,7 +168,9 @@ def build_cord_field_adapters() -> FieldAdapterRegistry:
     return registry
 
 
-def cord_fields(document: Mapping[str, Any]) -> Dict[str, List[MutableMapping[str, Any]]]:
+def cord_fields(
+    document: Mapping[str, Any]
+) -> Dict[str, List[MutableMapping[str, Any]]]:
     """Convert a normalised CORD document into registry-aligned field batches."""
 
     global _CORD_FIELD_ADAPTERS
@@ -202,11 +214,15 @@ def _iter_cord_words(document: Mapping[str, Any]) -> Iterable[MutableMapping[str
             yield entry
 
 
-def _build_cord_text_entries(document: Mapping[str, Any]) -> Iterable[MutableMapping[str, Any]]:
+def _build_cord_text_entries(
+    document: Mapping[str, Any]
+) -> Iterable[MutableMapping[str, Any]]:
     return _iter_cord_words(document)
 
 
-def _build_cord_layout_entries(document: Mapping[str, Any]) -> Iterable[MutableMapping[str, Any]]:
+def _build_cord_layout_entries(
+    document: Mapping[str, Any]
+) -> Iterable[MutableMapping[str, Any]]:
     for word in _iter_cord_words(document):
         entry: MutableMapping[str, Any] = {
             "doc_id": word["doc_id"],
@@ -218,11 +234,15 @@ def _build_cord_layout_entries(document: Mapping[str, Any]) -> Iterable[MutableM
         yield entry
 
 
-def _build_cord_line_entries(document: Mapping[str, Any]) -> Iterable[MutableMapping[str, Any]]:
+def _build_cord_line_entries(
+    document: Mapping[str, Any]
+) -> Iterable[MutableMapping[str, Any]]:
     doc_id = str(document.get("doc_id") or document.get("id") or "")
     for index, line in enumerate(document.get("lines", [])):
         words = line.get("words", [])
-        text_value = " ".join(str(word.get("text", "")).strip() for word in words if word.get("text")).strip()
+        text_value = " ".join(
+            str(word.get("text", "")).strip() for word in words if word.get("text")
+        ).strip()
         entry: MutableMapping[str, Any] = {
             "doc_id": doc_id,
             "line_id": _safe_int(line.get("line_id", line.get("group_id")), index),
@@ -388,7 +408,7 @@ def _iter_local_split(root: Path, split: str) -> Iterator[Dict[str, Any]]:
 
 
 def _prepare_document(raw: Mapping[str, Any]) -> Dict[str, Any]:
-    if "lines" in raw and "width" in raw and "height" in raw:
+    if ("lines" in raw or "valid_line" in raw) and "width" in raw and "height" in raw:
         return _finalise_document(raw)
 
     payload: Mapping[str, Any]
@@ -398,7 +418,7 @@ def _prepare_document(raw: Mapping[str, Any]) -> Dict[str, Any]:
     elif isinstance(ground_truth, Mapping):
         payload = ground_truth
     else:
-        payload = {}
+        payload = raw
     meta = payload.get("meta", {})
 
     image_size = meta.get("image_size") or {}

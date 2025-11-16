@@ -1,0 +1,108 @@
+{
+  "budgets": [
+    4,
+    8,
+    12,
+    16
+  ],
+  "dataset": "CORD-v2",
+  "dataset_size": 787,
+  "label_entropy_bits": 0.0,
+  "modes": {
+    "nd": {
+      "fano_error_lower_bound": 0.0,
+      "mean_mi_lower_bound_nats": 0.0,
+      "results": [
+        {
+          "accuracy": 0.9580686149936467,
+          "average_kept_tokens": 4.0,
+          "budget": 4,
+          "distortion": 0.041931385006353294,
+          "evaluated_documents": 787,
+          "mean_information_bound": 0.08441426483585879,
+          "mean_mi_lower_bound_nats": 0.0,
+          "mean_rate_distortion": 57.98602287166455
+        },
+        {
+          "accuracy": 0.9301143583227446,
+          "average_kept_tokens": 8.0,
+          "budget": 8,
+          "distortion": 0.06988564167725542,
+          "evaluated_documents": 787,
+          "mean_information_bound": 0.16882852967171758,
+          "mean_mi_lower_bound_nats": 0.0,
+          "mean_rate_distortion": 53.98602287166455
+        },
+        {
+          "accuracy": 0.9047013977128335,
+          "average_kept_tokens": 12.0,
+          "budget": 12,
+          "distortion": 0.09529860228716647,
+          "evaluated_documents": 787,
+          "mean_information_bound": 0.2532427945075765,
+          "mean_mi_lower_bound_nats": 0.0,
+          "mean_rate_distortion": 49.98602287166455
+        },
+        {
+          "accuracy": 0.8894536213468869,
+          "average_kept_tokens": 15.98856416772554,
+          "budget": 16,
+          "distortion": 0.11054637865311312,
+          "evaluated_documents": 787,
+          "mean_information_bound": 0.33677737993770746,
+          "mean_mi_lower_bound_nats": 0.0,
+          "mean_rate_distortion": 45.99745870393901
+        }
+      ]
+    },
+    "text": {
+      "fano_error_lower_bound": 0.0,
+      "mean_mi_lower_bound_nats": 0.0,
+      "results": [
+        {
+          "accuracy": 0.9567979669631512,
+          "average_kept_tokens": 4.0,
+          "budget": 4,
+          "distortion": 0.043202033036848775,
+          "evaluated_documents": 787,
+          "mean_information_bound": 0.21714137905091435,
+          "mean_mi_lower_bound_nats": 0.0,
+          "mean_rate_distortion": 20.09148665819568
+        },
+        {
+          "accuracy": 0.9263024142312579,
+          "average_kept_tokens": 7.984752223634054,
+          "budget": 8,
+          "distortion": 0.07369758576874208,
+          "evaluated_documents": 787,
+          "mean_information_bound": 0.43145102820529574,
+          "mean_mi_lower_bound_nats": 0.0,
+          "mean_rate_distortion": 16.106734434561627
+        },
+        {
+          "accuracy": 0.8983481575603558,
+          "average_kept_tokens": 11.753494282083862,
+          "budget": 12,
+          "distortion": 0.1016518424396442,
+          "evaluated_documents": 787,
+          "mean_information_bound": 0.6221139725185599,
+          "mean_mi_lower_bound_nats": 0.0,
+          "mean_rate_distortion": 12.337992376111817
+        },
+        {
+          "accuracy": 0.8843710292249047,
+          "average_kept_tokens": 14.865311308767472,
+          "budget": 16,
+          "distortion": 0.11562897077509526,
+          "evaluated_documents": 787,
+          "mean_information_bound": 0.7586352657397325,
+          "mean_mi_lower_bound_nats": 0.0,
+          "mean_rate_distortion": 9.226175349428209
+        }
+      ]
+    }
+  },
+  "split": "train",
+  "threshold": 250000.0,
+  "use_sample": false
+}

@@ -7,7 +7,7 @@ import argparse
 import json
 import math
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from benchmarks.cord import (
     build_cord_encoders,
@@ -56,6 +56,12 @@ def parse_args() -> argparse.Namespace:
         "--split",
         default="train",
         help="Dataset split passed to Hugging Face (default: train).",
+    )
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=None,
+        help="Optional path to local CORD dataset directory.",
     )
     parser.add_argument(
         "--cache-dir",
@@ -127,7 +133,9 @@ def evaluate_mode(
             prediction = predict_fn(result, document)
             if prediction == label:
                 correct += 1
-            kept = sum(len(indices) for indices in result.telemetry.selected_indices.values())
+            kept = sum(
+                len(indices) for indices in result.telemetry.selected_indices.values()
+            )
             kept_totals += kept
             metrics = result.metrics
             info_bound_sum += float(metrics.get("information_bound", 0.0) or 0.0)
@@ -185,6 +193,7 @@ def main() -> None:
         split=args.split,
         limit=args.dataset_size,
         use_sample=args.use_sample,
+        data_root=args.data_root,
         cache_dir=args.cache_dir,
     )
     if not dataset:

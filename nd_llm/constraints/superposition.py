@@ -14,16 +14,11 @@ def _flatten_tensor(payload: Any) -> List[float]:
         return []
     if isinstance(payload, (int, float)):
         return [float(payload)]
-    if isinstance(payload, (list, tuple)):
-        flattened: List[float] = []
+    if isinstance(payload, (list, tuple, Iterable)):
+        result: List[float] = []
         for item in payload:
-            flattened.extend(_flatten_tensor(item))
-        return flattened
-    if isinstance(payload, Iterable):
-        flattened: List[float] = []
-        for item in payload:
-            flattened.extend(_flatten_tensor(item))
-        return flattened
+            result.extend(_flatten_tensor(item))
+        return result
     return []
 
 
